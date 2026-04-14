@@ -29,6 +29,7 @@ import requests
 DEFAULT_NOTE_SUBDIR = "知识工作台/微信文章"
 DEFAULT_BUILD_CHUNK_SIZE = 900
 DEFAULT_BUILD_CHUNK_OVERLAP = 120
+READING_VIEW_SCREENSHOT_TIMEOUT_SECONDS = 90
 DEFAULT_SIMULATION_REQUIREMENT = (
     "请将这篇文章整理为知识工作台中的可阅读知识结构，优先抽取高价值实体与关系，"
     "输出适合阅读视图展示的主线骨架，并尽量保留问题、方案、架构、机制、技术、指标与案例。"
@@ -287,7 +288,8 @@ class ArticleWorkspacePipeline:
         project_url = build_project_url(project_id, self.frontend_base_url)
         reading_view_url = build_reading_view_url(project_id, self.frontend_base_url)
         screenshot_path = str(note_path.with_suffix(".reading-view.png"))
-        self._capture_reading_view(reading_view_url, screenshot_path)
+        screenshot_captured = self._capture_reading_view(reading_view_url, screenshot_path)
+        persisted_screenshot_path = screenshot_path if screenshot_captured else None
 
         self._write_note(
             note_path,
@@ -298,7 +300,7 @@ class ArticleWorkspacePipeline:
             project_url=project_url,
             project_id=project_id,
             graph_id=graph_id,
-            screenshot_path=screenshot_path,
+            screenshot_path=persisted_screenshot_path,
         )
 
         return ArticleWorkspaceResult(
@@ -308,7 +310,7 @@ class ArticleWorkspacePipeline:
             graph_id=graph_id,
             project_url=project_url,
             reading_view_url=reading_view_url,
-            reading_view_screenshot_path=screenshot_path,
+            reading_view_screenshot_path=screenshot_path if screenshot_captured else "",
             status_summary="文章已完成整理，阅读视图可直接打开。",
             source_url=source_url,
         )
@@ -515,7 +517,7 @@ class ArticleWorkspacePipeline:
             raise RuntimeError(project.get("error") or "图谱构建失败")
         return False
 
-    def _capture_reading_view(self, reading_view_url: str, screenshot_path: str) -> None:
+    def _capture_reading_view(self, reading_view_url: str, screenshot_path: str) -> bool:
         """尝试为阅读视图截屏。
 
         2026-04-12 修复：截图失败 **不再致命**。
@@ -545,13 +547,26 @@ class ArticleWorkspacePipeline:
             screenshot_path,
         ]
         try:
-            result = self.command_runner(command, capture_output=True, text=True)
+            result = self.command_runner(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=READING_VIEW_SCREENSHOT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            import logging as _logging
+            _logging.getLogger("mirofish.article_workspace_pipeline").warning(
+                "阅读视图截图降级 (非致命): 调用 playwright 超时(timeout=%ss): %s",
+                READING_VIEW_SCREENSHOT_TIMEOUT_SECONDS,
+                exc,
+            )
+            return False
         except Exception as exc:  # noqa: BLE001
             import logging as _logging
             _logging.getLogger("mirofish.article_workspace_pipeline").warning(
                 "阅读视图截图降级 (非致命): 调用 playwright 失败: %s", exc
             )
-            return
+            return False
 
         if result.returncode != 0:
             import logging as _logging
@@ -563,4 +578,12 @@ class ArticleWorkspacePipeline:
                 stderr[:500],
                 stdout[:500],
             )
-            return
+            return False
+        if not output_path.exists():
+            import logging as _logging
+            _logging.getLogger("mirofish.article_workspace_pipeline").warning(
+                "阅读视图截图降级 (非致命): playwright 返回成功但未生成文件: %s",
+                screenshot_path,
+            )
+            return False
+        return True

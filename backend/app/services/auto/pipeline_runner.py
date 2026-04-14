@@ -17,6 +17,8 @@ import concurrent.futures
 import json as _json
 import logging
 import os
+from pathlib import Path
+import re
 import threading
 import time
 import urllib.error
@@ -34,6 +36,10 @@ from .url_fingerprint import compute_content_hash
 
 
 logger = logging.getLogger(__name__)
+
+
+_DEFAULT_FRONTEND_BASE_URL = "http://localhost:3000"
+_VITE_PORT_RE = re.compile(r"\bport\s*:\s*(\d+)")
 
 
 # ---------------------------------------------------------------------------
@@ -322,10 +328,7 @@ class AutoPipelineRunner:
             os.environ.get("KNOWLEDGE_WORKSPACE_VAULT_ROOT")
             or os.path.expanduser("~/Downloads/OB笔记")
         )
-        frontend_base = (
-            os.environ.get("KNOWLEDGE_WORKSPACE_FRONTEND")
-            or "http://127.0.0.1:3001"
-        )
+        frontend_base = self._resolve_frontend_base_url()
         backend_base = (
             os.environ.get("KNOWLEDGE_WORKSPACE_BACKEND")
             or self.backend_base_url
@@ -341,6 +344,23 @@ class AutoPipelineRunner:
             fetch_script_path=fetch_script,
             note_subdir=DEFAULT_NOTE_SUBDIR,
         )
+
+    @staticmethod
+    def _resolve_frontend_base_url() -> str:
+        explicit = os.environ.get("KNOWLEDGE_WORKSPACE_FRONTEND")
+        if explicit:
+            return explicit.rstrip("/")
+
+        vite_config = (
+            Path(__file__).resolve().parents[4] / "frontend" / "vite.config.js"
+        )
+        try:
+            match = _VITE_PORT_RE.search(vite_config.read_text(encoding="utf-8"))
+        except OSError:
+            match = None
+        if match:
+            return f"http://localhost:{match.group(1)}"
+        return _DEFAULT_FRONTEND_BASE_URL
 
     def _normalize_pipeline_result(self, result) -> dict[str, Any]:
         result_dict = result.to_dict() if hasattr(result, "to_dict") else dict(result)
@@ -421,7 +441,9 @@ class AutoPipelineRunner:
                 # silently — it just means the watchdog waits on the
                 # total timeout instead of the stall timeout.
                 snapshot = self._latest_build_task_snapshot()
+                active_build_task = False
                 if snapshot is not None:
+                    active_build_task = True
                     watched_task_id = snapshot.get("task_id") or watched_task_id
                     last_phase = (
                         "build_verify"
@@ -437,6 +459,18 @@ class AutoPipelineRunner:
                         stall_start = time.monotonic()
                     elif stall_start is None:
                         stall_start = time.monotonic()
+                elif watched_task_id:
+                    watched_snapshot = self._get_task_snapshot(watched_task_id)
+                    watched_status = str((watched_snapshot or {}).get("status") or "")
+                    if watched_status in {"completed", "failed", "cancelled"}:
+                        # Once the build task has finished, the remaining
+                        # process_url() work is post-build finalization
+                        # (reading-view capture, note writeback, etc.).
+                        # Do not keep using the last build progress
+                        # signature to trigger a false "build stall".
+                        last_progress_signature = None
+                        stall_start = None
+                        last_phase = "post_build"
 
                 if elapsed > AUTO_PIPELINE_TOTAL_TIMEOUT_SECONDS:
                     self._request_cancel(
@@ -450,7 +484,8 @@ class AutoPipelineRunner:
                     )
 
                 if (
-                    stall_start is not None
+                    active_build_task
+                    and stall_start is not None
                     and time.monotonic() - stall_start
                     > AUTO_PIPELINE_STALL_TIMEOUT_SECONDS
                 ):
@@ -495,6 +530,14 @@ class AutoPipelineRunner:
             if task_type.startswith("构建图谱") or task_type.startswith("graph_build"):
                 return task
         return None
+
+    def _get_task_snapshot(self, task_id: str) -> Optional[dict[str, Any]]:
+        """Return one graph task payload, or ``None`` if unavailable."""
+        try:
+            body = self._http_get(f"{self.backend_base_url}/api/graph/task/{task_id}")
+        except Exception:  # noqa: BLE001
+            return None
+        return body.get("data") or None
 
     def _request_cancel(
         self, task_id: Optional[str], *, reason: str

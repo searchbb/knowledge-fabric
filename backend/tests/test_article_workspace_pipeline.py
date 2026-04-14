@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -95,7 +96,7 @@ def test_fetch_markdown_from_url_uses_current_python_for_python_scripts(tmp_path
         stdout = "# 标题\n\n" + ("正文" * 120)
         stderr = ""
 
-    def fake_command_runner(command, capture_output=True, text=True):
+    def fake_command_runner(command, capture_output=True, text=True, timeout=None):
         commands.append(command)
         return _Result()
 
@@ -130,7 +131,7 @@ def test_fetch_markdown_from_url_executes_wrapper_directly(tmp_path):
         stdout = "# 标题\n\n" + ("正文" * 120)
         stderr = ""
 
-    def fake_command_runner(command, capture_output=True, text=True):
+    def fake_command_runner(command, capture_output=True, text=True, timeout=None):
         commands.append(command)
         return _Result()
 
@@ -204,7 +205,7 @@ def test_pipeline_process_markdown_file_updates_note_and_returns_links(tmp_path)
 
     screenshots = []
 
-    def fake_command_runner(command, capture_output=True, text=True):
+    def fake_command_runner(command, capture_output=True, text=True, timeout=None):
         if command[:3] == ["npx", "playwright", "screenshot"]:
             screenshot_path = Path(command[-1])
             screenshot_path.write_bytes(b"png")
@@ -246,3 +247,35 @@ def test_pipeline_process_markdown_file_updates_note_and_returns_links(tmp_path)
     assert screenshots
     assert session.build_payload["chunk_size"] == 900
     assert session.build_payload["chunk_overlap"] == 120
+
+
+def test_pipeline_process_markdown_file_continues_when_screenshot_times_out(tmp_path):
+    markdown_path = tmp_path / "article.md"
+    markdown_path.write_text("# 示例文章\n\n正文内容", encoding="utf-8")
+
+    def fake_command_runner(command, capture_output=True, text=True, timeout=None):
+        if command[:3] == ["npx", "playwright", "screenshot"]:
+            raise subprocess.TimeoutExpired(cmd=command, timeout=timeout or 0)
+        raise AssertionError(f"unexpected command: {command}")
+
+    pipeline = ArticleWorkspacePipeline(
+        vault_root=tmp_path / "vault",
+        frontend_base_url="http://localhost:3001",
+        backend_base_url="http://localhost:5001",
+        fetch_script_path="/tmp/fetch.py",
+        note_subdir="知识工作台/微信文章",
+        session=_FakeSession(),
+        command_runner=fake_command_runner,
+        sleep_func=lambda _: None,
+    )
+
+    result = pipeline.process_markdown_file(
+        markdown_file=markdown_path,
+        source_url="https://example.com/article",
+    )
+
+    note_text = Path(result.md_path).read_text(encoding="utf-8")
+    assert "reading_view_url:" in note_text
+    assert "project_id: proj_test" in note_text
+    assert "reading_view_screenshot:" not in note_text
+    assert result.reading_view_screenshot_path == ""

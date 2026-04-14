@@ -16,6 +16,7 @@ JSON 是 source of truth (global_themes.json + concept_registry.json)。
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -48,40 +49,56 @@ def _run_async(coro):
 class ThemeNeo4jRepository:
     """Neo4j 镜像层，所有方法都是同步的 (内部用 _run_async 桥接)。"""
 
-    def __init__(self):
-        self._driver = None
-
     def _get_driver(self):
-        if self._driver is None:
-            self._driver = _get_driver()
-        return self._driver
+        return _get_driver()
 
     async def _exec(self, query: str, params: Optional[Dict] = None):
         driver = self._get_driver()
-        # Graphiti's Neo4jDriver.execute_query signature varies by version.
-        # Some versions accept (query, parameters=dict), some only (query).
-        # Inline the parameters into the query as a workaround.
-        if params:
-            # Use neo4j's parameter syntax: $key is already in the query,
-            # so pass via the database_ kwarg pattern or inline.
-            # Try keyword first, fall back to inline.
+        try:
+            # Graphiti's execute_query kwarg contract is unstable across
+            # versions. In this repo's pinned version, "parameters" is
+            # ignored and Neo4j receives the raw $placeholders. Inline the
+            # values explicitly so the mirror layer stays deterministic.
+            rendered_query = self._inline_query_params(query, params) if params else query
+            return await driver.execute_query(rendered_query)
+        finally:
             try:
-                return await driver.execute_query(query, parameters=params)
-            except TypeError:
-                # Inline params into the query string for simple cases
-                for key, val in params.items():
-                    placeholder = f"${key}"
-                    if isinstance(val, str):
-                        query = query.replace(placeholder, f"'{val}'")
-                    elif isinstance(val, (int, float)):
-                        query = query.replace(placeholder, str(val))
-                    elif val is None:
-                        query = query.replace(placeholder, "null")
-                return await driver.execute_query(query)
-        return await driver.execute_query(query)
+                close_result = driver.close()
+                if inspect.isawaitable(close_result):
+                    await close_result
+            except Exception:  # noqa: BLE001
+                logger.debug("closing neo4j driver skipped", exc_info=True)
 
     def exec_sync(self, query: str, params: Optional[Dict] = None):
         return _run_async(self._exec(query, params))
+
+    @classmethod
+    def _inline_query_params(cls, query: str, params: Dict[str, Any]) -> str:
+        rendered = query
+        for key in sorted(params.keys(), key=len, reverse=True):
+            rendered = rendered.replace(f"${key}", cls._render_cypher_literal(params[key]))
+        return rendered
+
+    @classmethod
+    def _render_cypher_literal(cls, value: Any) -> str:
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, str):
+            escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+            return f"'{escaped}'"
+        if isinstance(value, list):
+            return "[" + ", ".join(cls._render_cypher_literal(item) for item in value) + "]"
+        if isinstance(value, dict):
+            pairs = ", ".join(
+                f"{key}: {cls._render_cypher_literal(item)}"
+                for key, item in value.items()
+            )
+            return "{" + pairs + "}"
+        return cls._render_cypher_literal(str(value))
 
     # ── Schema ──────────────────────────────────────────────────
 
@@ -104,14 +121,14 @@ class ThemeNeo4jRepository:
         self.exec_sync(
             """
             MERGE (t:Theme {theme_id: $theme_id})
+            ON CREATE SET
+                t.created_at  = $created_at
             SET t.name        = $name,
                 t.slug        = $slug,
                 t.description = $description,
                 t.status      = $status,
                 t.source      = $source,
                 t.updated_at  = $updated_at
-            ON CREATE SET
-                t.created_at  = $created_at
             """,
             {
                 "theme_id": theme["theme_id"],
@@ -138,11 +155,11 @@ class ThemeNeo4jRepository:
         self.exec_sync(
             """
             MERGE (c:CanonicalConcept {entry_id: $entry_id})
+            ON CREATE SET
+                c.created_at     = $created_at
             SET c.canonical_name = $canonical_name,
                 c.concept_type   = $concept_type,
                 c.updated_at     = $updated_at
-            ON CREATE SET
-                c.created_at     = $created_at
             """,
             {
                 "entry_id": entry["entry_id"],
