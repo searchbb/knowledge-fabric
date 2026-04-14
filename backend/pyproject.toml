@@ -12,29 +12,40 @@ dependencies = [
     # 核心框架
     "flask>=3.0.0",
     "flask-cors>=6.0.0",
-    
+    "requests>=2.31.0",
+
     # LLM 相关
     "openai>=1.0.0",
-    
-    # Zep Cloud
+    "json-repair>=0.30.0",
+
+    # 图谱核心（Phase 2 工作台主链路）
+    "graphiti-core>=0.28.0,<0.30.0",
+    "neo4j>=5.23.0,<6.0.0",
+
+    # Zep Cloud（Phase 2 主链路不强依赖，保留以兼容 legacy 入口）
     "zep-cloud==3.13.0",
-    
-    # OASIS 社交媒体模拟
-    "camel-oasis==0.2.5",
-    "camel-ai==0.2.78",
-    
-    # 文件处理
+
+    # 文件处理 / 网页解析
     "PyMuPDF>=1.24.0",
+    "beautifulsoup4>=4.12.0",
+    "html2text>=2024.2.26",
+    # 阅读视图截图（若使用，需要额外执行 `playwright install chromium`）
+    "playwright>=1.45.0",
     # 编码检测（支持非UTF-8编码的文本文件）
     "charset-normalizer>=3.0.0",
     "chardet>=5.0.0",
-    
+
     # 工具库
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
+# 注意：OASIS legacy 仿真链路（camel-oasis / camel-ai）的 neo4j 版本 pin 与
+# graphiti-core 冲突，无法和主依赖共存于同一个环境约束里。
+# 如需启用 legacy 仿真，请用独立的虚拟环境安装：
+#   pip install -r backend/requirements-legacy.txt --no-deps
+# 或参考 README 的 "启用 legacy 仿真链路" 一节。
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

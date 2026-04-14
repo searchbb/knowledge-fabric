@@ -1,0 +1,17 @@
+# ===========================================
+# Legacy: OASIS 社交模拟 / 报告链路依赖
+# ===========================================
+# 这组依赖仅在启用 legacy 链路时需要（ENABLE_LEGACY_ZEP_SIMULATION=true）。
+# camel-oasis 硬 pin 了 neo4j==5.23.0，与 graphiti-core>=0.28.0 要求的
+# neo4j>=5.26.0 冲突，因此单独安装，推荐在独立虚拟环境里使用：
+#
+#   python -m venv .venv-legacy
+#   source .venv-legacy/bin/activate
+#   pip install -r backend/requirements-legacy.txt
+#
+# 或者在主环境里用 --no-deps 强装（不推荐，容易破坏主环境 neo4j 约束）：
+#
+#   pip install --no-deps -r backend/requirements-legacy.txt
+
+camel-oasis==0.2.5
+camel-ai==0.2.78

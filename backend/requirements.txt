@@ -1,35 +1,45 @@
 # ===========================================
-# MiroFish Backend Dependencies
+# Knowledge Fabric Backend Dependencies
 # ===========================================
 # Python 3.11+ required
-# Install: pip install -r requirements.txt
+# 推荐用 uv: `uv sync` 会读取 pyproject.toml / uv.lock，更快且锁定版本。
+# 也可直接用 pip: `pip install -r requirements.txt`
 # ===========================================
 
 # ============= 核心框架 =============
 flask>=3.0.0
 flask-cors>=6.0.0
+requests>=2.31.0
 
 # ============= LLM 相关 =============
 # OpenAI SDK（统一使用 OpenAI 格式调用 LLM）
 openai>=1.0.0
+# LLM JSON 输出修复
+json-repair>=0.30.0
 
-# ============= Zep Cloud =============
+# ============= 图谱核心（Phase 2 主链路） =============
+graphiti-core>=0.28.0,<0.30.0
+neo4j>=5.23.0,<6.0.0
+
+# ============= Zep Cloud（legacy 兼容） =============
 zep-cloud==3.13.0
 
-# ============= OASIS 社交媒体模拟 =============
-# OASIS 社交模拟框架
-camel-oasis==0.2.5
-camel-ai==0.2.78
-
-# ============= 文件处理 =============
+# ============= 文件 / 网页解析 =============
 PyMuPDF>=1.24.0
+beautifulsoup4>=4.12.0
+html2text>=2024.2.26
+# 阅读视图截图（使用时还需执行 `playwright install chromium`）
+playwright>=1.45.0
+
 # 编码检测（支持非UTF-8编码的文本文件）
 charset-normalizer>=3.0.0
 chardet>=5.0.0
 
 # ============= 工具库 =============
-# 环境变量加载
 python-dotenv>=1.0.0
-
-# 数据验证
 pydantic>=2.0.0
+
+# ============= Legacy（可选，仅 OASIS 模拟链路需要） =============
+# 这两个包体积较大（torch / transformers），只有启用 legacy 仿真/报告时才需要。
+# camel-oasis==0.2.5
+# camel-ai==0.2.78

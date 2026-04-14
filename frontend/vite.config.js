@@ -9,7 +9,7 @@ export default defineConfig({
     globals: true,
   },
   server: {
-    port: 5179,
+    port: 3000,
     strictPort: true,  // fail if port is taken, don't silently switch
     open: false,
     proxy: {

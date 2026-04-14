@@ -1,9 +1,11 @@
 services:
-  mirofish:
-    image: ghcr.io/666ghj/mirofish:latest
-    # 加速镜像（如拉取缓慢可替换上方地址）
-    # image: ghcr.nju.edu.cn/666ghj/mirofish:latest
-    container_name: mirofish
+  knowledge-fabric:
+    # 默认本地 build，避免依赖尚未发布的远程镜像。
+    # CI 发布 GHCR 镜像后，可注释掉 build 并启用下面的 image 行。
+    build:
+      context: .
+    # image: ghcr.io/searchbb/knowledge-fabric:latest
+    container_name: knowledge-fabric
     env_file:
       - .env
     ports:
@@ -12,3 +14,4 @@ services:
     restart: unless-stopped
     volumes:
       - ./backend/uploads:/app/backend/uploads
+      - ./backend/data:/app/backend/data
