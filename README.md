@@ -12,7 +12,7 @@
 
 ## ⚡ 项目概述
 
-**Knowledge Fabric** 当前公开主线不是“仿真预测引擎”，而是一个 **文章 -> 图谱 -> 知识工作台** 的 AI 原生知识系统。
+**Knowledge Fabric** 当前公开主线不是"仿真预测引擎"，而是一个 **文章 -> 图谱 -> 知识工作台** 的 AI 原生知识系统。
 
 它关注的是：把长文、研究笔记、网页文章和 Markdown，整理成一个可持续治理的知识工作台，而不是一次性摘要。
 
@@ -72,37 +72,49 @@
 
 #### 前置要求
 
-| 工具 | 版本要求 | 说明 | 安装检查 |
-|------|---------|------|---------|
-| **Node.js** | 18+ | 前端运行环境，包含 npm | `node -v` |
-| **Python** | ≥3.11, ≤3.12 | 后端运行环境 | `python --version` |
-| **uv** | 最新版 | Python 包管理器 | `uv --version` |
-| **Neo4j** | 5+ | Graphiti 本地图数据库 | `neo4j --version` 或确认本地实例可连接 |
+| 工具 | 版本要求 | 安装命令 / 安装检查 |
+|------|---------|---------------------|
+| **Node.js** | 18+ | `node -v` ／ [下载](https://nodejs.org/) |
+| **Python** | ≥3.11, ≤3.12 | `python3 --version` |
+| **uv** | 最新版 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` ／ `uv --version` |
+| **Neo4j** | 5.26+ | Docker 一键启动见下方；或用 [Neo4j Desktop](https://neo4j.com/download/) |
+
+**启动一个本地 Neo4j（Docker 方式，最省事）：**
+
+```bash
+docker run -d \
+  --name knowledge-fabric-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/graphiti123 \
+  -v $HOME/neo4j-data:/data \
+  neo4j:5.26
+```
+
+- 浏览器访问 `http://localhost:7474/` 做一次口令确认
+- 配合 `.env` 里 `NEO4J_URI=bolt://localhost:7687 / NEO4J_USER=neo4j / NEO4J_PASSWORD=graphiti123`
 
 #### 1. 配置环境变量
 
 ```bash
-# 复制示例配置文件
 cp .env.example .env
-
-# 编辑 .env 文件，填入必要的 API 密钥
+# 编辑 .env，至少填入 LLM_API_KEY
 ```
 
-**必需的环境变量：**
+**最小可运行 `.env` 示例：**
 
 ```env
-# 基础 LLM（OpenAI 兼容）
-LLM_API_KEY=your_api_key
+# 核心 LLM（OpenAI 兼容；不想用 OpenAI 可换成任意兼容网关）
+LLM_API_KEY=sk-xxxxxxxx
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL_NAME=gpt-4o-mini
 
 # Neo4j / Graphiti
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_neo4j_password
+NEO4J_PASSWORD=graphiti123
 ```
 
-`ZEP_API_KEY`、`DEEPSEEK_API_KEY`、`OBSIDIAN_VAULT_PATH`、`OPENCLAW_FETCH_SCRIPT_PATH` 等配置都属于可选项；具体见 [`.env.example`](./.env.example)。
+其它如 `ZEP_API_KEY`、`DEEPSEEK_API_KEY`、`OBSIDIAN_VAULT_PATH`、`OPENCLAW_FETCH_SCRIPT_PATH` 均为可选项，完整说明见 [`.env.example`](./.env.example)。
 
 #### 2. 安装依赖
 
@@ -114,12 +126,15 @@ npm run setup:all
 或者分步安装：
 
 ```bash
-# 安装 Node 依赖（根目录 + 前端）
-npm run setup
-
-# 安装 Python 依赖（后端，自动创建虚拟环境）
-npm run setup:backend
+npm run setup          # Node 依赖（根目录 + 前端）
+npm run setup:backend  # Python 依赖（uv sync，自动创建 .venv）
 ```
+
+> 如果要使用"阅读视图截图"功能（`article_workspace_pipeline` 会调用 playwright 生成阅读视图 png），额外执行一次：
+>
+> ```bash
+> cd backend && uv run playwright install chromium
+> ```
 
 #### 3. 启动服务
 
@@ -134,7 +149,7 @@ npm run dev
 
 **推荐入口：**
 - Phase 2 工作台总览：`http://localhost:3000/workspace/overview`
-- 旧版首页/legacy 入口：`http://localhost:3000/`
+- 旧版首页 / legacy 入口：`http://localhost:3000/`
 
 **单独启动：**
 
@@ -143,28 +158,76 @@ npm run backend   # 仅启动后端
 npm run frontend  # 仅启动前端
 ```
 
+#### 4. 首次启动验证路径
+
+1. 访问 `http://localhost:3000/workspace/overview`，页面能加载说明前端 + `/api/*` 代理就绪
+2. 如顶部出现 "Neo4j 未连接" 类提示，检查 `docker ps` 里 neo4j 容器是否在跑、`.env` 里的口令是否和容器一致
+3. 打开"自动处理队列"或"文章导入"页面，粘贴一个微信 / 博客 URL 或上传一份 Markdown，观察图谱是否成功生成
+4. 如 LLM 报 401 或 404，优先检查 `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL_NAME` 三个字段是否和你接入的网关匹配
+
 ### 二、Docker 部署
 
 ```bash
 # 1. 配置环境变量（同源码部署）
 cp .env.example .env
 
-# 2. 拉取镜像并启动
-docker compose up -d
+# 2. 本地 build + 启动
+docker compose up -d --build
 ```
 
-默认会读取根目录下的 `.env`，并映射端口 `3000（前端）/5001（后端）`。
+默认会读取根目录下的 `.env`，并映射端口 `3000（前端）/ 5001（后端）`。
 
-当前 `docker-compose.yml` 只负责启动应用容器；**Neo4j 仍需你自行准备并通过环境变量连接**。
+当前 `docker-compose.yml` 只负责启动应用容器；**Neo4j 仍需你自行准备并通过环境变量连接**，可以照上面的 `docker run` 命令在宿主机起一个实例，再把 `NEO4J_URI` 指到 `host.docker.internal:7687`（macOS / Windows）或宿主机 IP（Linux）。
 
-> 在 `docker-compose.yml` 中已通过注释提供加速镜像地址，可按需替换
+> 后续在 CI 发布 GHCR 镜像后，可以把 compose 里的 `build:` 换成 `image: ghcr.io/searchbb/knowledge-fabric:latest` 直接拉镜像。
+
+## 🧪 运行测试
+
+后端有一套 pytest 测试套件。默认运行：
+
+```bash
+cd backend
+uv run pytest -q
+```
+
+部分测试需要真实的 Neo4j 与 LLM 在线调用（主要是 `test_graph_builder_normalization.py`、`test_theme_attach_detach_audit.py`、`test_e2e_registry_flows.py`、`test_evolution_log_api.py` 的一部分）。只跑**纯单测闭环**：
+
+```bash
+# 只跑不依赖外部服务的快速子集
+uv run pytest -q --ignore=tests/test_graph_builder_normalization.py \
+                 --ignore=tests/test_theme_attach_detach_audit.py \
+                 --ignore=tests/test_e2e_registry_flows.py \
+                 --ignore=tests/test_evolution_log_api.py
+```
+
+## 🛠 常见启动问题
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `npm run dev` 前端报 `port 3000 is already in use` | 3000 端口被占（别的 dev server / Docker） | 改 `frontend/vite.config.js` 的 `server.port`，同时在 `.env` 里设 `KNOWLEDGE_WORKSPACE_FRONTEND=http://localhost:<新端口>` |
+| 后端报 `ModuleNotFoundError: graphiti_core` | Python 依赖没装 | 确认 `uv sync` 跑过；后端启动必须用 `uv run python run.py` 或激活 `backend/.venv`，不要用系统 `python3` |
+| 后端连 Neo4j 报 `ServiceUnavailable` | Neo4j 没起 / 口令不匹配 | `docker ps \| grep neo4j`；必要时 `docker logs knowledge-fabric-neo4j` 看详情 |
+| 阅读视图截图失败 `ERR_CONNECTION_REFUSED` | 前端没起在 3000，或 playwright 浏览器没装 | 确认 `npm run frontend` 已启；执行 `cd backend && uv run playwright install chromium` |
+| LLM 调用 401 / 404 | `LLM_BASE_URL` / `LLM_MODEL_NAME` 与 key 不匹配 | 按你用的网关文档核对；OpenAI 官方就是 `https://api.openai.com/v1` + `gpt-4o-mini` |
+
+## 🔁 启用 Legacy 仿真链路（可选）
+
+`camel-oasis` / `camel-ai` 硬 pin 了一个与主链路冲突的 Neo4j 版本，所以它们**不在**主依赖里。
+
+只有当你需要 legacy 仿真 / 报告能力（并且在 `.env` 里打开 `ENABLE_LEGACY_ZEP_SIMULATION=true`）时，才推荐在**独立虚拟环境**里单独安装：
+
+```bash
+python -m venv .venv-legacy
+source .venv-legacy/bin/activate
+pip install -r backend/requirements-legacy.txt
+```
 
 ## ⚠️ 已知限制
 
 - `review` 页面当前仍是 prototype，主要用于验证审核主链路
 - `evolution` 页面当前展示的是项目内演化快照，不是完整历史时间轴
 - 首页与历史入口仍带有 legacy 流程痕迹，Phase 2 尚未完全接管所有主入口
-- 部分后端测试依赖额外本地服务或可选依赖；对外发布时建议优先以最小可运行路径为准
+- 部分后端测试依赖真实 Neo4j / 真实 LLM；默认 `uv run pytest` 会有 10+ 个 test（集中在 `test_graph_builder_normalization.py` / `test_theme_attach_detach_audit.py` 等）标红，是预期内的"需要外部环境"行为
 
 ## 📬 社区与反馈
 
@@ -172,4 +235,4 @@ docker compose up -d
 
 ## 📄 致谢
 
-Knowledge Fabric 的部分 legacy 仿真能力由 **[OASIS](https://github.com/camel-ai/oasis)** 驱动；当前 Phase 2 工作台能力继续围绕本地图谱、知识治理与工作台体验演进。
+Knowledge Fabric 的部分 legacy 仿真能力由 **[OASIS](https://github.com/camel-ai/oasis)** 驱动；当前 Phase 2 工作台能力继续围绕本地图谱（Graphiti + Neo4j）、知识治理与工作台体验演进。

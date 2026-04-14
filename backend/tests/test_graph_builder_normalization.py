@@ -1,8 +1,11 @@
 import asyncio
+import importlib.util
 import json
 import sys
 import types
 from types import SimpleNamespace
+
+import pytest
 
 from graphiti_core.prompts.extract_edges import ExtractedEdges
 from graphiti_core.prompts.extract_nodes import ExtractedEntities, SummarizedEntities
@@ -13,6 +16,18 @@ from app.services.graph_builder import (
     LocalEmbedder,
     MiniMaxLLMClient,
     PHASE1_SINGLE_CALL_TIMEOUT_SECONDS,
+)
+
+
+_HAS_SENTENCE_TRANSFORMERS = importlib.util.find_spec("sentence_transformers") is not None
+_REQUIRES_LOCAL_EMBEDDER = pytest.mark.skipif(
+    not _HAS_SENTENCE_TRANSFORMERS,
+    reason=(
+        "needs sentence-transformers for LocalEmbedder; without it Graphiti"
+        " falls back to a live OpenAI call. Install with "
+        "`pip install sentence-transformers` or run alongside the legacy "
+        "venv to enable this test."
+    ),
 )
 
 
@@ -1070,6 +1085,7 @@ def test_add_text_batches_bulk_context_overflow_falls_back_to_single(monkeypatch
     assert diagnostics["processed_chunk_count"] == 1
 
 
+@_REQUIRES_LOCAL_EMBEDDER
 def test_add_text_batches_bulk_progress_callback():
     """Progress callback is called at start and end."""
     class FakeClient:

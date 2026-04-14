@@ -72,59 +72,74 @@ What is still preview / prototype:
 
 #### Prerequisites
 
-| Tool | Version | Description | Check Installation |
-|------|---------|-------------|-------------------|
-| **Node.js** | 18+ | Frontend runtime, includes npm | `node -v` |
-| **Python** | ≥3.11, ≤3.12 | Backend runtime | `python --version` |
-| **uv** | Latest | Python package manager | `uv --version` |
-| **Neo4j** | 5+ | Local database for Graphiti | `neo4j --version` or verify a reachable local instance |
+| Tool | Version | Install / Check |
+|------|---------|-----------------|
+| **Node.js** | 18+ | `node -v` / [download](https://nodejs.org/) |
+| **Python** | ≥3.11, ≤3.12 | `python3 --version` |
+| **uv** | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` / `uv --version` |
+| **Neo4j** | 5.26+ | Docker one-liner below, or [Neo4j Desktop](https://neo4j.com/download/) |
+
+**Run a local Neo4j via Docker (easiest):**
+
+```bash
+docker run -d \
+  --name knowledge-fabric-neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/graphiti123 \
+  -v $HOME/neo4j-data:/data \
+  neo4j:5.26
+```
+
+- Visit `http://localhost:7474/` once to confirm the password
+- Keep `.env` aligned: `NEO4J_URI=bolt://localhost:7687 / NEO4J_USER=neo4j / NEO4J_PASSWORD=graphiti123`
 
 #### 1. Configure Environment Variables
 
 ```bash
-# Copy the example configuration file
 cp .env.example .env
-
-# Edit the .env file and fill in the required API keys
+# Edit .env, at minimum set LLM_API_KEY
 ```
 
-**Required Environment Variables:**
+**Minimum viable `.env`:**
 
 ```env
-# Core LLM (OpenAI-compatible)
-LLM_API_KEY=your_api_key
+# Core LLM (OpenAI-compatible — any compatible gateway works)
+LLM_API_KEY=sk-xxxxxxxx
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL_NAME=gpt-4o-mini
 
 # Neo4j / Graphiti
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_neo4j_password
+NEO4J_PASSWORD=graphiti123
 ```
 
-`ZEP_API_KEY`, `DEEPSEEK_API_KEY`, `OBSIDIAN_VAULT_PATH`, and `OPENCLAW_FETCH_SCRIPT_PATH` are optional. See [`.env.example`](./.env.example) for the current template.
+`ZEP_API_KEY`, `DEEPSEEK_API_KEY`, `OBSIDIAN_VAULT_PATH`, and `OPENCLAW_FETCH_SCRIPT_PATH` are optional. See [`.env.example`](./.env.example) for the full template.
 
 #### 2. Install Dependencies
 
 ```bash
-# One-click installation of all dependencies (root + frontend + backend)
+# One-click install for root + frontend + backend
 npm run setup:all
 ```
 
 Or install step by step:
 
 ```bash
-# Install Node dependencies (root + frontend)
-npm run setup
-
-# Install Python dependencies (backend, auto-creates virtual environment)
-npm run setup:backend
+npm run setup          # Node deps (root + frontend)
+npm run setup:backend  # Python deps (uv sync, creates .venv)
 ```
 
-#### 3. Start Services
+> If you plan to use the reading-view screenshot feature (the `article_workspace_pipeline` calls `playwright` to render the reading view to PNG), also run:
+>
+> ```bash
+> cd backend && uv run playwright install chromium
+> ```
+
+#### 3. Start the Services
 
 ```bash
-# Start both frontend and backend (run from project root)
+# Start both frontend and backend (from the project root)
 npm run dev
 ```
 
@@ -136,12 +151,19 @@ npm run dev
 - Phase 2 workspace overview: `http://localhost:3000/workspace/overview`
 - Legacy home / compatibility entry: `http://localhost:3000/`
 
-**Start Individually:**
+**Run individually:**
 
 ```bash
-npm run backend   # Start backend only
-npm run frontend  # Start frontend only
+npm run backend   # backend only
+npm run frontend  # frontend only
 ```
+
+#### 4. First-Run Verification Path
+
+1. Open `http://localhost:3000/workspace/overview` — if the page loads, the frontend + the `/api/*` proxy are wired.
+2. If you see a "Neo4j not connected" warning, check `docker ps` for the Neo4j container and confirm the password in `.env`.
+3. Try the "auto pipeline queue" or "article import" page: paste a WeChat / blog URL, or upload a Markdown file, and watch the graph build.
+4. LLM returning 401 / 404? Double-check `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL_NAME` against your gateway's docs.
 
 ### Option 2: Docker Deployment
 
@@ -149,27 +171,67 @@ npm run frontend  # Start frontend only
 # 1. Configure environment variables (same as source deployment)
 cp .env.example .env
 
-# 2. Pull image and start
-docker compose up -d
+# 2. Local build + launch
+docker compose up -d --build
 ```
 
-Reads `.env` from root directory by default and maps ports `3000 (frontend) / 5001 (backend)`.
+Reads `.env` from the root directory by default and maps ports `3000 (frontend) / 5001 (backend)`.
 
-The current `docker-compose.yml` starts the app container only; **you still need to provide a reachable Neo4j instance via environment variables**.
+The current `docker-compose.yml` only launches the app container — **you still need to provide a reachable Neo4j instance**. Use the `docker run` command above, then set `NEO4J_URI` to `host.docker.internal:7687` (macOS / Windows) or the host IP (Linux).
 
-> Mirror address for faster pulling is provided as comments in `docker-compose.yml`, replace if needed.
+> Once a GHCR image is published by CI, you can swap the `build:` in `docker-compose.yml` for `image: ghcr.io/searchbb/knowledge-fabric:latest` to skip the local build.
+
+## 🧪 Running Tests
+
+The backend ships a pytest suite. Default run:
+
+```bash
+cd backend
+uv run pytest -q
+```
+
+Some tests require a real Neo4j + live LLM (mostly in `test_graph_builder_normalization.py`, `test_theme_attach_detach_audit.py`, `test_e2e_registry_flows.py`, and parts of `test_evolution_log_api.py`). To run only the **pure unit tests**:
+
+```bash
+uv run pytest -q --ignore=tests/test_graph_builder_normalization.py \
+                 --ignore=tests/test_theme_attach_detach_audit.py \
+                 --ignore=tests/test_e2e_registry_flows.py \
+                 --ignore=tests/test_evolution_log_api.py
+```
+
+## 🛠 Common Issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `npm run dev` fails: `port 3000 is already in use` | Port 3000 taken (another dev server / Docker) | Change `server.port` in `frontend/vite.config.js` and set `KNOWLEDGE_WORKSPACE_FRONTEND=http://localhost:<new>` in `.env` |
+| Backend `ModuleNotFoundError: graphiti_core` | Python deps missing | Make sure `uv sync` ran; start the backend with `uv run python run.py` (or activate `backend/.venv`) — do not use the system `python3` |
+| Backend Neo4j `ServiceUnavailable` | Neo4j not running or password mismatch | `docker ps \| grep neo4j`; if needed `docker logs knowledge-fabric-neo4j` |
+| Reading-view screenshot `ERR_CONNECTION_REFUSED` | Frontend not on 3000, or playwright browser not installed | Make sure `npm run frontend` is up; run `cd backend && uv run playwright install chromium` |
+| LLM 401 / 404 | `LLM_BASE_URL` / `LLM_MODEL_NAME` mismatched with your key | Reconcile with your gateway's docs; OpenAI official is `https://api.openai.com/v1` + `gpt-4o-mini` |
+
+## 🔁 Enabling Legacy Simulation (optional)
+
+`camel-oasis` / `camel-ai` pin a Neo4j version that conflicts with the main pipeline, so they are **not** in the main dependencies.
+
+Only if you need the legacy simulation / report capability (and set `ENABLE_LEGACY_ZEP_SIMULATION=true` in `.env`), install them in a **separate virtual environment**:
+
+```bash
+python -m venv .venv-legacy
+source .venv-legacy/bin/activate
+pip install -r backend/requirements-legacy.txt
+```
 
 ## ⚠️ Known Limitations
 
 - `review` is still a prototype and should not be treated as a finished governance workflow
 - `evolution` currently shows project-level readiness snapshots rather than a full historical timeline
-- the home/history entry still carries legacy flow assumptions; Phase 2 has not fully replaced every primary entry yet
-- some backend tests require optional local services or extra dependencies; for public release, prioritize the minimal runnable path first
+- the home / history entry still carries legacy flow assumptions; Phase 2 has not fully replaced every primary entry yet
+- some backend tests expect a live Neo4j + live LLM; under a plain `uv run pytest` a dozen or so tests in `test_graph_builder_normalization.py` / `test_theme_attach_detach_audit.py` are expected to fail — this is the "requires external environment" contract
 
-## 📬 Community and Feedback
+## 📬 Community & Feedback
 
 - Feedback via GitHub Issues / PRs is welcome
 
 ## 📄 Acknowledgments
 
-Knowledge Fabric carries forward some legacy simulation capabilities powered by **[OASIS](https://github.com/camel-ai/oasis)**. The current Phase 2 workspace continues to evolve around local graph building, knowledge governance, and workspace UX.
+Knowledge Fabric carries forward some legacy simulation capabilities powered by **[OASIS](https://github.com/camel-ai/oasis)**. The current Phase 2 workspace continues to evolve around local graph building (Graphiti + Neo4j), knowledge governance, and workspace UX.
