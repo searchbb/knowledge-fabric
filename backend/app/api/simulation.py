@@ -9,6 +9,11 @@ from flask import request, jsonify, send_file
 
 from . import simulation_bp
 from ..config import Config
+from ..services.legacy_surface_flags import (
+    LEGACY_SURFACE_SIMULATION,
+    build_legacy_surface_disabled_payload,
+    is_legacy_surface_enabled,
+)
 from ..services.zep_entity_reader import ZepEntityReader
 from ..services.oasis_profile_generator import OasisProfileGenerator
 from ..services.simulation_manager import SimulationManager, SimulationStatus
@@ -17,6 +22,13 @@ from ..utils.logger import get_logger
 from ..models.project import ProjectManager
 
 logger = get_logger('mirofish.api.simulation')
+
+
+@simulation_bp.before_request
+def _ensure_simulation_surface_enabled():
+    if is_legacy_surface_enabled(LEGACY_SURFACE_SIMULATION):
+        return None
+    return jsonify(build_legacy_surface_disabled_payload(LEGACY_SURFACE_SIMULATION)), 410
 
 
 # Interview prompt 优化前缀

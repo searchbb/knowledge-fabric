@@ -1,11 +1,11 @@
 [project]
-name = "mirofish-backend"
+name = "knowledge-fabric-backend"
 version = "0.1.0"
-description = "MiroFish - 简洁通用的群体智能引擎，预测万物"
+description = "Backend services for Knowledge Fabric"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0" }
 authors = [
-    { name = "MiroFish Team" }
+    { name = "Knowledge Fabric Team" }
 ]
 
 dependencies = [
@@ -49,6 +49,11 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: end-to-end tests requiring live LLM and Neo4j",
 ]
 
 [tool.hatch.build.targets.wheel]

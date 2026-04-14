@@ -3,19 +3,19 @@
     <!-- Header -->
     <header class="app-header">
       <div class="header-left">
-        <div class="brand" @click="router.push('/')">MIROFISH</div>
+        <div class="brand" @click="router.push('/')">知识工作台</div>
       </div>
       
       <div class="header-center">
         <div class="view-switcher">
           <button 
-            v-for="mode in ['graph', 'split', 'workbench']" 
+            v-for="mode in viewModes" 
             :key="mode"
             class="switch-btn"
             :class="{ active: viewMode === mode }"
             @click="viewMode = mode"
           >
-            {{ { graph: '图谱', split: '双栏', workbench: '工作台' }[mode] }}
+            {{ viewModeLabels[mode] }}
           </button>
         </div>
       </div>
@@ -33,6 +33,13 @@
       </div>
     </header>
 
+    <LegacySurfaceNotice
+      title="旧模拟运行流程"
+      :workspacePath="workspacePath"
+    />
+
+    <Phase1SummaryStrip :taskResult="phase1TaskResult" />
+
     <!-- Main Content Area -->
     <main class="content-area">
       <!-- Left Panel: Graph -->
@@ -42,6 +49,9 @@
           :loading="graphLoading"
           :currentPhase="3"
           :isSimulating="isSimulating"
+          :readingStructure="projectData?.reading_structure || null"
+          :schemaEntityTypes="projectData?.ontology?.entity_types || []"
+          :schemaRelationTypes="projectData?.ontology?.edge_types || []"
           @refresh="refreshGraph"
           @toggle-maximize="toggleMaximize('graph')"
         />
@@ -70,9 +80,20 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphPanel from '../components/GraphPanel.vue'
+import Phase1SummaryStrip from '../components/Phase1SummaryStrip.vue'
 import Step3Simulation from '../components/Step3Simulation.vue'
-import { getProject, getGraphData } from '../api/graph'
+import LegacySurfaceNotice from '../components/common/LegacySurfaceNotice.vue'
+import { getGraphData } from '../api/graph'
 import { getSimulation, getSimulationConfig, stopSimulation, closeSimulationEnv, getEnvStatus } from '../api/simulation'
+import { loadProjectWorkbenchState } from '../utils/projectWorkbenchState'
+import {
+  WORKBENCH_VIEW_LABELS,
+  WORKBENCH_VIEW_MODES,
+  appendWorkbenchLog,
+  buildWorkbenchPanelStyle,
+  toggleWorkbenchMode,
+} from '../utils/workbenchLayout'
+import { resolveWorkbenchStateFromSimulation } from '../utils/workbenchDataLoaders'
 
 const route = useRoute()
 const router = useRouter()
@@ -83,6 +104,8 @@ const props = defineProps({
 })
 
 // Layout State
+const viewModes = WORKBENCH_VIEW_MODES
+const viewModeLabels = WORKBENCH_VIEW_LABELS
 const viewMode = ref('split')
 
 // Data State
@@ -92,21 +115,18 @@ const maxRounds = ref(route.query.maxRounds ? parseInt(route.query.maxRounds) : 
 const minutesPerRound = ref(30) // 默认每轮30分钟
 const projectData = ref(null)
 const graphData = ref(null)
+const phase1TaskResult = ref(null)
 const graphLoading = ref(false)
 const systemLogs = ref([])
 const currentStatus = ref('processing') // processing | completed | error
 
 // --- Computed Layout Styles ---
 const leftPanelStyle = computed(() => {
-  if (viewMode.value === 'graph') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'workbench') return { width: '0%', opacity: 0, transform: 'translateX(-20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+  return buildWorkbenchPanelStyle(viewMode.value, 'left')
 })
 
 const rightPanelStyle = computed(() => {
-  if (viewMode.value === 'workbench') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'graph') return { width: '0%', opacity: 0, transform: 'translateX(20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+  return buildWorkbenchPanelStyle(viewMode.value, 'right')
 })
 
 // --- Status Computed ---
@@ -122,13 +142,14 @@ const statusText = computed(() => {
 
 const isSimulating = computed(() => currentStatus.value === 'processing')
 
+const workspacePath = computed(() => {
+  const projectId = projectData.value?.project_id
+  return projectId ? `/workspace/${projectId}/article` : ''
+})
+
 // --- Helpers ---
 const addLog = (msg) => {
-  const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + new Date().getMilliseconds().toString().padStart(3, '0')
-  systemLogs.value.push({ time, msg })
-  if (systemLogs.value.length > 200) {
-    systemLogs.value.shift()
-  }
+  appendWorkbenchLog(systemLogs, msg, 200)
 }
 
 const updateStatus = (status) => {
@@ -137,11 +158,7 @@ const updateStatus = (status) => {
 
 // --- Layout Methods ---
 const toggleMaximize = (target) => {
-  if (viewMode.value === target) {
-    viewMode.value = 'split'
-  } else {
-    viewMode.value = target
-  }
+  toggleWorkbenchMode(viewMode, target)
 }
 
 const handleGoBack = async () => {
@@ -202,38 +219,35 @@ const handleNextStep = () => {
 const loadSimulationData = async () => {
   try {
     addLog(`加载模拟数据: ${currentSimulationId.value}`)
-    
-    // 获取 simulation 信息
-    const simRes = await getSimulation(currentSimulationId.value)
-    if (simRes.success && simRes.data) {
-      const simData = simRes.data
-      
-      // 获取 simulation config 以获取 minutes_per_round
-      try {
-        const configRes = await getSimulationConfig(currentSimulationId.value)
-        if (configRes.success && configRes.data?.time_config?.minutes_per_round) {
-          minutesPerRound.value = configRes.data.time_config.minutes_per_round
-          addLog(`时间配置: 每轮 ${minutesPerRound.value} 分钟`)
-        }
-      } catch (configErr) {
-        addLog(`获取时间配置失败，使用默认值: ${minutesPerRound.value}分钟/轮`)
+
+    const result = await resolveWorkbenchStateFromSimulation(currentSimulationId.value, {
+      getSimulation,
+      loadProjectWorkbenchState,
+    })
+
+    if (!result.success) {
+      addLog(`加载模拟数据失败: ${result.error}`)
+      return
+    }
+
+    try {
+      const configRes = await getSimulationConfig(currentSimulationId.value)
+      if (configRes.success && configRes.data?.time_config?.minutes_per_round) {
+        minutesPerRound.value = configRes.data.time_config.minutes_per_round
+        addLog(`时间配置: 每轮 ${minutesPerRound.value} 分钟`)
       }
-      
-      // 获取 project 信息
-      if (simData.project_id) {
-        const projRes = await getProject(simData.project_id)
-        if (projRes.success && projRes.data) {
-          projectData.value = projRes.data
-          addLog(`项目加载成功: ${projRes.data.project_id}`)
-          
-          // 获取 graph 数据
-          if (projRes.data.graph_id) {
-            await loadGraph(projRes.data.graph_id)
-          }
-        }
+    } catch (configErr) {
+      addLog(`获取时间配置失败，使用默认值: ${minutesPerRound.value}分钟/轮`)
+    }
+
+    if (result.workbenchState) {
+      projectData.value = result.workbenchState.project
+      graphData.value = result.workbenchState.graphData
+      phase1TaskResult.value = result.workbenchState.phase1TaskResult
+      addLog(`项目加载成功: ${result.workbenchState.project.project_id}`)
+      if (result.workbenchState.graphData) {
+        addLog('图谱数据加载成功')
       }
-    } else {
-      addLog(`加载模拟数据失败: ${simRes.error || '未知错误'}`)
     }
   } catch (err) {
     addLog(`加载异常: ${err.message}`)
@@ -340,10 +354,10 @@ onUnmounted(() => {
 }
 
 .brand {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Noto Sans SC', 'JetBrains Mono', monospace;
   font-weight: 800;
   font-size: 18px;
-  letter-spacing: 1px;
+  letter-spacing: 0.08em;
   cursor: pointer;
 }
 
@@ -444,4 +458,3 @@ onUnmounted(() => {
   border-right: 1px solid #EAEAEA;
 }
 </style>
-

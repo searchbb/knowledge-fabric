@@ -5,10 +5,23 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@100..800&family=Noto+Sans+SC:wght@300;400;500;700;800;900&family=Space+Grotesk:wght@300..700&display=swap" rel="stylesheet">
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="MiroFish - 社交媒体舆论模拟系统" />
-    <title>MiroFish - 预测万物</title>
+    <script>
+      // 首屏防 FOUC:Vue 挂载前就把 data-theme 写到 <html>,
+      // 否则会闪烁(先默认主题,JS 执行后才切过去)。
+      (function () {
+        var saved = null;
+        try { saved = localStorage.getItem('gewu-ui-theme'); } catch (e) {}
+        var id = saved || 'ivory-study';
+        var allowed = ['ivory-study', 'night-scholar', 'blue-ledger', 'ink-wash', 'sepia-archive'];
+        if (allowed.indexOf(id) === -1) {
+          id = 'ivory-study';
+        }
+        document.documentElement.setAttribute('data-theme', id);
+      })();
+    </script>
+    <meta name="description" content="Knowledge Fabric - A knowledge workspace for research and insight" />
+    <title>Knowledge Fabric</title>
   </head>
   <body>
     <div id="app"></div>

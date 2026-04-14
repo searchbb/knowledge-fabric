@@ -1,0 +1,54 @@
+/*
+ * 夜读墨屏 · Night Scholar
+ *
+ * 暖黑 + 米白,不用纯黑,不用纯白字。
+ * 设计意图:灯下读札记的感觉,长时间阅读和盯图谱不累眼。
+ */
+
+html[data-theme="night-scholar"] {
+  --bg-app:           #151311;
+  --bg-app-gradient:  radial-gradient(circle at top right, rgba(214, 161, 90, 0.08), transparent 28%),
+                      linear-gradient(180deg, #17140f 0%, #1a1613 30%, #151311 100%);
+  --bg-canvas:        #1a1713;
+  --bg-surface:       #1d1a17;
+  --bg-surface-2:     #26211d;
+  --bg-elevated:      #2a241f;
+  --bg-muted:         rgba(214, 161, 90, 0.10);
+  --bg-selected:      linear-gradient(180deg, #2c251e 0%, #231e19 100%);
+
+  --text-primary:     #eee6da;
+  --text-secondary:   #c4b8a5;
+  --text-muted:       #8a7f70;
+  --text-on-accent:   #1a1713;
+
+  --border-default:   #3c342c;
+  --border-strong:    #4a4038;
+  --border-muted:     #2a2420;
+
+  --accent-primary:        #d6a15a;
+  --accent-primary-hover:  #e6b468;
+  --accent-soft:           rgba(214, 161, 90, 0.18);
+  --accent-group-label:    #c4935a;
+  --focus-ring:            rgba(214, 161, 90, 0.45);
+
+  --state-warning:    #e0a84a;
+  --state-danger:     #e07060;
+
+  --input-bg:         #1d1a17;
+  --input-border:     #3c342c;
+  --input-border-focus: #d6a15a;
+
+  /* 夜读:纸面用暖棕黑(不用纯黑),字用米白偏黄(不用纯白) */
+  --reading-paper:        #1f1b17;
+  --reading-ink:          #e6dcc8;
+  --reading-quote-bar:    #d6a15a;
+  --reading-code-bg:      #2a241e;
+  --reading-code-border:  #3c342c;
+  --reading-highlight-bg: rgba(214, 161, 90, 0.22);
+  --reading-annotate:     #c4935a;
+  --reading-divider:      #3c342c;
+  /* 夜里代码块比 app 还深一档,边界明显但不刺眼 */
+  --reading-code-panel-bg:     #0f0c0a;
+  --reading-code-panel-ink:    #eee6da;
+  --reading-code-panel-border: #2a241e;
+}

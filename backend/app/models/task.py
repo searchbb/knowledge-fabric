@@ -17,6 +17,7 @@ class TaskStatus(str, Enum):
     PROCESSING = "processing"    # 处理中
     COMPLETED = "completed"      # 已完成
     FAILED = "failed"            # 失败
+    CANCELLED = "cancelled"      # 已取消（cooperative cancel 生效后）
 
 
 @dataclass
@@ -33,7 +34,15 @@ class Task:
     error: Optional[str] = None    # 错误信息
     metadata: Dict = field(default_factory=dict)  # 额外元数据
     progress_detail: Dict = field(default_factory=dict)  # 详细进度信息
-    
+    # Cooperative-cancel flag. When set to True, long-running workers
+    # (e.g. the graph builder chunk loop) MUST check it at every safe
+    # boundary and exit voluntarily. Nothing can hard-kill the daemon
+    # thread, so the cancel is best-effort: the currently-in-flight LLM
+    # call still completes before the worker notices.
+    cancel_requested: bool = False
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: str = ""
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -48,6 +57,9 @@ class Task:
             "result": self.result,
             "error": self.error,
             "metadata": self.metadata,
+            "cancel_requested": self.cancel_requested,
+            "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
+            "cancel_reason": self.cancel_reason,
         }
 
 
@@ -160,9 +172,48 @@ class TaskManager:
             message="任务失败",
             error=error
         )
-    
-    def list_tasks(self, task_type: Optional[str] = None) -> list:
-        """列出任务"""
+
+    def request_cancel(self, task_id: str, *, reason: str = "") -> bool:
+        """Request cooperative cancellation of a task.
+
+        Sets ``cancel_requested=True`` on the task record. The worker
+        (e.g. the graph builder chunk loop) must poll this flag at its
+        own safe boundaries and exit voluntarily. Returns True if the
+        flag was set, False if the task is missing or already in a
+        terminal state.
+        """
+        with self._task_lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return False
+            if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+                return False
+            task.cancel_requested = True
+            task.cancel_reason = reason or task.cancel_reason
+            task.updated_at = datetime.now()
+            return True
+
+    def is_cancel_requested(self, task_id: str) -> bool:
+        """Cheap poll used from long-running worker threads."""
+        with self._task_lock:
+            task = self._tasks.get(task_id)
+            return bool(task and task.cancel_requested)
+
+    def mark_cancelled(self, task_id: str, *, reason: str = "") -> None:
+        """Called by the worker after it observed the cancel flag."""
+        with self._task_lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return
+            task.status = TaskStatus.CANCELLED
+            task.cancelled_at = datetime.now()
+            task.updated_at = task.cancelled_at
+            task.error = reason or "cancelled"
+            if reason and not task.cancel_reason:
+                task.cancel_reason = reason
+
+    def list_tasks(self, task_type: Optional[str] = None) -> list[Dict[str, Any]]:
+        """列出任务字典，按创建时间倒序。"""
         with self._task_lock:
             tasks = list(self._tasks.values())
             if task_type:
@@ -181,4 +232,3 @@ class TaskManager:
             ]
             for tid in old_ids:
                 del self._tasks[tid]
-

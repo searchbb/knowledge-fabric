@@ -421,6 +421,10 @@ class SimulationRunner:
             # 如果指定了最大轮数，添加到命令行参数
             if max_rounds is not None and max_rounds > 0:
                 cmd.extend(["--max-rounds", str(max_rounds)])
+
+            # 临时：只跑 Twitter 平台，避免 Reddit 卡死阻塞整个模拟
+            if script_name == "run_parallel_simulation.py":
+                cmd.append("--twitter-only")
             
             # 创建主日志文件，避免 stdout/stderr 管道缓冲区满导致进程阻塞
             main_log_path = os.path.join(sim_dir, "simulation.log")

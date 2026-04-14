@@ -44,10 +44,17 @@ htmlcov/
 # Cursor
 .cursor/
 .claude/
+.codex/
+.codex-backups/
+.ralph/
+.ralphrc
+.graphify_detect_app.json
 
 # 文档与测试程序
 mydoc/
 mytest/
+CLAUDE.md
+AGENTS.md
 
 # 日志文件
 backend/logs/
@@ -58,3 +65,16 @@ backend/uploads/
 
 # Docker 数据
 data/
+
+# 本地生成/实验产物
+graphify-out/
+backend/app/graphify-out/
+output/
+raw/
+backend/=0.30.0
+docs/cleanup-notes/
+docs/superpowers/
+backend/app/archive/
+frontend/src/archive/
+backend/scripts/test_graphiti_*.py
+scripts/

@@ -1156,7 +1156,7 @@ async def run_twitter_simulation(
         agent_graph=result.agent_graph,
         platform=oasis.DefaultPlatformType.TWITTER,
         database_path=db_path,
-        semaphore=30,  # 限制最大并发 LLM 请求数，防止 API 过载
+        semaphore=5,  # 限制最大并发 LLM 请求数，防止 API 过载
     )
     
     await result.env.reset()
@@ -1251,8 +1251,15 @@ async def run_twitter_simulation(
             continue
         
         actions = {agent: LLMAction() for _, agent in active_agents}
-        await result.env.step(actions)
-        
+        log_info(f"Round {round_num + 1}: {len(active_agents)} agents, calling env.step...")
+        try:
+            await asyncio.wait_for(result.env.step(actions), timeout=120)
+            log_info(f"Round {round_num + 1}: env.step completed")
+        except asyncio.TimeoutError:
+            log_info(f"⚠ Round {round_num + 1} env.step 超时(120s)，跳过本轮")
+        except Exception as e:
+            log_info(f"⚠ Round {round_num + 1} env.step 异常: {e}")
+
         # 从数据库获取实际执行的动作并记录
         actual_actions, last_rowid = fetch_new_actions_from_db(
             db_path, last_rowid, agent_names
@@ -1347,7 +1354,7 @@ async def run_reddit_simulation(
         agent_graph=result.agent_graph,
         platform=oasis.DefaultPlatformType.REDDIT,
         database_path=db_path,
-        semaphore=30,  # 限制最大并发 LLM 请求数，防止 API 过载
+        semaphore=5,  # 限制最大并发 LLM 请求数，防止 API 过载
     )
     
     await result.env.reset()
@@ -1450,8 +1457,15 @@ async def run_reddit_simulation(
             continue
         
         actions = {agent: LLMAction() for _, agent in active_agents}
-        await result.env.step(actions)
-        
+        log_info(f"Round {round_num + 1}: {len(active_agents)} agents, calling env.step...")
+        try:
+            await asyncio.wait_for(result.env.step(actions), timeout=120)
+            log_info(f"Round {round_num + 1}: env.step completed")
+        except asyncio.TimeoutError:
+            log_info(f"⚠ Round {round_num + 1} env.step 超时(120s)，跳过本轮")
+        except Exception as e:
+            log_info(f"⚠ Round {round_num + 1} env.step 异常: {e}")
+
         # 从数据库获取实际执行的动作并记录
         actual_actions, last_rowid = fetch_new_actions_from_db(
             db_path, last_rowid, agent_names

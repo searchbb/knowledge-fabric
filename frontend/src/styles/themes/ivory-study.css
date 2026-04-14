@@ -1,0 +1,52 @@
+/*
+ * 米色文房 · Ivory Study
+ *
+ * 默认主题。本文件里的值跟 tokens.css 里 :root 的默认值一致 —
+ * 显式再写一遍是为了 data-theme 切换回默认时不漏覆盖。
+ */
+
+html[data-theme="ivory-study"] {
+  --bg-app:           #f8f4ea;
+  --bg-app-gradient:  radial-gradient(circle at top right, rgba(247, 203, 123, 0.12), transparent 24%),
+                      linear-gradient(180deg, #f8f4ea 0%, #f7f6f1 26%, #ffffff 100%);
+  --bg-canvas:        #ffffff;
+  --bg-surface:       #fffdf8;
+  --bg-surface-2:     #fff9ef;
+  --bg-elevated:      #ffffff;
+  --bg-muted:         rgba(255, 235, 200, 0.55);
+  --bg-selected:      linear-gradient(180deg, #fff3df 0%, #fffaf1 100%);
+
+  --text-primary:     #3b342a;
+  --text-secondary:   #6d6256;
+  --text-muted:       #9a8d7c;
+  --text-on-accent:   #ffffff;
+
+  --border-default:   #eadfcb;
+  --border-strong:    #d8c9a8;
+  --border-muted:     #eef1f5;
+
+  --accent-primary:        #bf7d28;
+  --accent-primary-hover:  #8c5a14;
+  --accent-soft:           rgba(191, 125, 40, 0.12);
+  --accent-group-label:    #9a6b2e;
+  --focus-ring:            rgba(191, 125, 40, 0.35);
+
+  --state-warning:    #c78a2a;
+  --state-danger:     #c0392b;
+
+  --input-bg:         #ffffff;
+  --input-border:     #eadfcb;
+  --input-border-focus: #bf7d28;
+
+  --reading-paper:        #fffaf0;
+  --reading-ink:          #2a2520;
+  --reading-quote-bar:    #bf7d28;
+  --reading-code-bg:      #f6efde;
+  --reading-code-border:  #eadfcb;
+  --reading-highlight-bg: rgba(255, 224, 130, 0.35);
+  --reading-annotate:     #9a6b2e;
+  --reading-divider:      #eadfcb;
+  --reading-code-panel-bg:     #2a241c;
+  --reading-code-panel-ink:    #f3ecdc;
+  --reading-code-panel-border: #3c332a;
+}

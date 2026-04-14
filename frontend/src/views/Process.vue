@@ -2,7 +2,7 @@
   <div class="process-page">
     <!-- 顶部导航栏 -->
     <nav class="navbar">
-      <div class="nav-brand" @click="goHome">MIROFISH</div>
+      <div class="nav-brand" @click="goHome">知识工作台</div>
       
       <!-- 中间步骤指示器 -->
       <div class="nav-center">
@@ -58,7 +58,7 @@
               <div class="detail-panel-header">
                 <span class="detail-title">{{ selectedItem.type === 'node' ? 'Node Details' : 'Relationship' }}</span>
                 <span v-if="selectedItem.type === 'node'" class="detail-badge" :style="{ background: selectedItem.color }">
-                  {{ selectedItem.entityType }}
+                  {{ selectedItem.entityTypeLabel }}
                 </span>
                 <button class="detail-close" @click="closeDetailPanel">×</button>
               </div>
@@ -215,7 +215,7 @@
         <div v-if="graphData" class="graph-legend">
           <div class="legend-item" v-for="type in entityTypes" :key="type.name">
             <span class="legend-dot" :style="{ background: type.color }"></span>
-            <span class="legend-label">{{ type.name }}</span>
+            <span class="legend-label">{{ type.label }}</span>
             <span class="legend-count">{{ type.count }}</span>
           </div>
         </div>
@@ -274,21 +274,21 @@
               </div>
               
               <div class="detail-section" v-if="projectData?.ontology">
-                <div class="detail-label">生成的关系类型 ({{ projectData.ontology.relation_types?.length || 0 }})</div>
+                <div class="detail-label">生成的关系类型 ({{ projectData.ontology.edge_types?.length || 0 }})</div>
                 <div class="relation-list">
                   <div 
-                    v-for="(rel, idx) in projectData.ontology.relation_types?.slice(0, 5) || []" 
+                    v-for="(rel, idx) in projectData.ontology.edge_types?.slice(0, 5) || []" 
                     :key="idx"
                     class="relation-item"
                   >
-                    <span class="rel-source">{{ rel.source_type }}</span>
+                    <span class="rel-source">{{ rel.source_targets?.[0]?.source || '-' }}</span>
                     <span class="rel-arrow">→</span>
                     <span class="rel-name">{{ rel.name }}</span>
                     <span class="rel-arrow">→</span>
-                    <span class="rel-target">{{ rel.target_type }}</span>
+                    <span class="rel-target">{{ rel.source_targets?.[0]?.target || '-' }}</span>
                   </div>
-                  <div v-if="(projectData.ontology.relation_types?.length || 0) > 5" class="relation-more">
-                    +{{ projectData.ontology.relation_types.length - 5 }} 更多关系...
+                  <div v-if="(projectData.ontology.edge_types?.length || 0) > 5" class="relation-more">
+                    +{{ projectData.ontology.edge_types.length - 5 }} 更多关系...
                   </div>
                 </div>
               </div>
@@ -440,6 +440,20 @@ const isFullScreen = ref(false)
 const graphContainer = ref(null)
 const graphSvg = ref(null)
 
+const TYPE_LABEL_MAP = {
+  Topic: '主题',
+  Problem: '问题',
+  Solution: '方案',
+  Architecture: '架构',
+  Layer: '层级',
+  Mechanism: '机制',
+  Decision: '决策',
+  Technology: '技术',
+  Metric: '指标',
+  Example: '案例',
+  Entity: '实体'
+}
+
 // 轮询定时器
 let pollTimer = null
 
@@ -467,7 +481,12 @@ const entityTypes = computed(() => {
   graphData.value.nodes.forEach(node => {
     const type = node.labels?.find(l => l !== 'Entity') || 'Entity'
     if (!typeMap[type]) {
-      typeMap[type] = { name: type, count: 0, color: colors[Object.keys(typeMap).length % colors.length] }
+      typeMap[type] = {
+        name: type,
+        label: TYPE_LABEL_MAP[type] || type,
+        count: 0,
+        color: colors[Object.keys(typeMap).length % colors.length]
+      }
     }
     typeMap[type].count++
   })
@@ -517,11 +536,13 @@ const formatDate = (dateStr) => {
 
 // 选中节点
 const selectNode = (nodeData, color) => {
+  const entityType = nodeData.labels?.find(l => l !== 'Entity' && l !== 'Node') || 'Entity'
   selectedItem.value = {
     type: 'node',
     data: nodeData,
     color: color,
-    entityType: nodeData.labels?.find(l => l !== 'Entity' && l !== 'Node') || 'Entity'
+    entityType,
+    entityTypeLabel: TYPE_LABEL_MAP[entityType] || entityType
   }
 }
 
@@ -585,6 +606,10 @@ const handleNewProject = async () => {
       formDataObj.append('files', file)
     })
     formDataObj.append('simulation_requirement', pending.simulationRequirement)
+    // 若用户在上传页选了 Obsidian vault 归档目录,透传给后端;空值后端会走 backend/uploads
+    if (pending.vaultRelativeDir) {
+      formDataObj.append('vault_relative_dir', pending.vaultRelativeDir)
+    }
     
     // 调用本体生成 API
     const response = await generateOntology(formDataObj)
@@ -1122,9 +1147,10 @@ onUnmounted(() => {
 }
 
 .nav-brand {
+  font-family: 'Noto Sans SC', 'JetBrains Mono', monospace;
   font-size: 1rem;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   cursor: pointer;
   transition: opacity 0.2s;
 }
@@ -1201,9 +1227,9 @@ onUnmounted(() => {
   position: relative;
 }
 
-/* 左侧面板 - 50% default */
+/* 左侧面板 - desktop default ~2/3 */
 .left-panel {
-  width: 50%;
+  width: 67%;
   flex: none; /* Fixed width initially */
   display: flex;
   flex-direction: column;
@@ -1672,9 +1698,9 @@ onUnmounted(() => {
   color: #999;
 }
 
-/* 右侧面板 - 50% default */
+/* 右侧面板 - desktop default ~1/3 */
 .right-panel {
-  width: 50%;
+  width: 33%;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -1706,7 +1732,7 @@ onUnmounted(() => {
 .process-content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 20px;
 }
 
 /* 流程阶段 */

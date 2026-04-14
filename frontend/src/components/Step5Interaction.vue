@@ -155,7 +155,7 @@
               <div class="tools-card-avatar">R</div>
               <div class="tools-card-info">
                 <div class="tools-card-name">Report Agent - Chat</div>
-                <div class="tools-card-subtitle">报告生成智能体的快速对话版本，可调用 4 种专业工具，拥有MiroFish的完整记忆</div>
+                <div class="tools-card-subtitle">报告生成智能体的快速对话版本，可调用 4 种专业工具，拥有知识工作台的完整记忆</div>
               </div>
               <button class="tools-card-toggle" @click="showToolsDetail = !showToolsDetail">
                 <svg :class="{ 'is-expanded': showToolsDetail }" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">

@@ -1,0 +1,100 @@
+/*
+ * 格物 · Design Tokens
+ *
+ * 分两层:
+ *   - Foundation 色板(--color-*):原始色,不直接被组件消费。
+ *   - Semantic token(--bg-/--text-/--border-/--accent-/--state-):组件只吃这一层。
+ *
+ * 默认值 = 米色文房(ivory-study),保证 JS 或 localStorage 失败时有完整 fallback。
+ * 主题通过 html[data-theme="..."] 覆盖 semantic token,foundation 不动。
+ */
+
+:root {
+  /* ============ Foundation · Ivory Study ============ */
+  --color-ivory-50:   #fffdf8;
+  --color-ivory-100:  #fff9ef;
+  --color-ivory-200:  #f8f4ea;
+  --color-ivory-300:  #f7f6f1;
+  --color-sand-200:   #eadfcb;
+  --color-sand-300:   #d8c9a8;
+  --color-umber-400:  #bf7d28;
+  --color-umber-500:  #8c5a14;
+  --color-umber-600:  #9a6b2e;
+  --color-ink-400:    #9a8d7c;
+  --color-ink-600:    #6d6256;
+  --color-ink-900:    #3b342a;
+
+  /* ============ Semantic · Surfaces ============ */
+  --bg-app:           var(--color-ivory-200);
+  --bg-app-gradient:  radial-gradient(circle at top right, rgba(247, 203, 123, 0.12), transparent 24%),
+                      linear-gradient(180deg, #f8f4ea 0%, #f7f6f1 26%, #ffffff 100%);
+  --bg-canvas:        #ffffff;
+  --bg-surface:       var(--color-ivory-50);
+  --bg-surface-2:     var(--color-ivory-100);
+  --bg-elevated:      #ffffff;
+  --bg-muted:         rgba(255, 235, 200, 0.55);
+  --bg-selected:      linear-gradient(180deg, #fff3df 0%, #fffaf1 100%);
+
+  /* ============ Semantic · Text ============ */
+  --text-primary:     var(--color-ink-900);
+  --text-secondary:   var(--color-ink-600);
+  --text-muted:       var(--color-ink-400);
+  --text-on-accent:   #ffffff;
+
+  /* ============ Semantic · Border ============ */
+  --border-default:   var(--color-sand-200);
+  --border-strong:    var(--color-sand-300);
+  --border-muted:     #eef1f5;
+
+  /* ============ Semantic · Accent ============ */
+  --accent-primary:        var(--color-umber-400);
+  --accent-primary-hover:  var(--color-umber-500);
+  --accent-soft:           rgba(191, 125, 40, 0.12);
+  --accent-group-label:    var(--color-umber-600);
+  --focus-ring:            rgba(191, 125, 40, 0.35);
+
+  /* ============ Semantic · State ============ */
+  --state-warning:    #c78a2a;
+  --state-danger:     #c0392b;
+
+  /* ============ Semantic · Input ============ */
+  --input-bg:         #ffffff;
+  --input-border:     var(--color-sand-200);
+  --input-border-focus: var(--color-umber-400);
+
+  /* ============ Semantic · Reading ============
+   * 正文阅读区(文章 / 原文面板)专用。跟 --bg-canvas 区分:
+   * Blue Ledger 等冷色主题下,reading-paper 保暖白避免办公软件感。 */
+  --reading-paper:        #fffaf0;
+  --reading-ink:          #2a2520;
+  --reading-quote-bar:    var(--color-umber-400);
+  --reading-code-bg:      #f6efde;
+  --reading-code-border:  var(--color-sand-200);
+  --reading-highlight-bg: rgba(255, 224, 130, 0.35);
+  --reading-annotate:     var(--color-umber-600);
+  --reading-divider:      var(--color-sand-200);
+  /* Fenced / pre 块级代码区,跟 inline code 分开,允许各主题下保持"终端感" */
+  --reading-code-panel-bg:     #2a241c;
+  --reading-code-panel-ink:    #f3ecdc;
+  --reading-code-panel-border: #3c332a;
+}
+
+/* =================================================================
+ * 主题切换平滑过渡
+ * 只给「会跟着主题换」的属性加 transition,不要给 transform 之类加。
+ * ================================================================= */
+html[data-theme] body,
+html[data-theme] .app-shell,
+html[data-theme] .app-sidebar,
+html[data-theme] .app-topbar,
+html[data-theme] .brand-name,
+html[data-theme] .brand-sub,
+html[data-theme] .nav-item,
+html[data-theme] .group-label,
+html[data-theme] .sidebar-footer,
+html[data-theme] .crumb,
+html[data-theme] .new-tab-btn,
+html[data-theme] .user-menu-trigger,
+html[data-theme] .user-menu-panel {
+  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+}

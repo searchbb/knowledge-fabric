@@ -1,0 +1,55 @@
+/*
+ * 冷色学术 · Blue Ledger
+ *
+ * 理性、清洁、冷静。
+ * 设计意图:看 registry、做对比分析、偏工作时段。
+ * 阅读区可通过 --reading-paper(后续扩展)保留暖白,避免太"办公软件感"。
+ */
+
+html[data-theme="blue-ledger"] {
+  --bg-app:           #eef3f9;
+  --bg-app-gradient:  radial-gradient(circle at top right, rgba(58, 110, 165, 0.08), transparent 28%),
+                      linear-gradient(180deg, #eef3f9 0%, #f5f8fc 30%, #ffffff 100%);
+  --bg-canvas:        #ffffff;
+  --bg-surface:       #ffffff;
+  --bg-surface-2:     #f5f8fc;
+  --bg-elevated:      #ffffff;
+  --bg-muted:         rgba(58, 110, 165, 0.08);
+  --bg-selected:      linear-gradient(180deg, #dbe7f5 0%, #edf3fa 100%);
+
+  --text-primary:     #1f2a37;
+  --text-secondary:   #5b6b7f;
+  --text-muted:       #8a98ac;
+  --text-on-accent:   #ffffff;
+
+  --border-default:   #d6dfec;
+  --border-strong:    #b8c6dc;
+  --border-muted:     #e5ebf3;
+
+  --accent-primary:        #3a6ea5;
+  --accent-primary-hover:  #274e75;
+  --accent-soft:           rgba(58, 110, 165, 0.12);
+  --accent-group-label:    #4a6fa5;
+  --focus-ring:            rgba(58, 110, 165, 0.35);
+
+  --state-warning:    #c78a2a;
+  --state-danger:     #c0392b;
+
+  --input-bg:         #ffffff;
+  --input-border:     #d6dfec;
+  --input-border-focus: #3a6ea5;
+
+  /* 冷色学术:UI 偏冷,但阅读纸面保暖白避免"办公软件感" */
+  --reading-paper:        #fdfbf5;
+  --reading-ink:          #1f2a37;
+  --reading-quote-bar:    #3a6ea5;
+  --reading-code-bg:      #eef3f9;
+  --reading-code-border:  #d6dfec;
+  --reading-highlight-bg: rgba(255, 224, 130, 0.30);
+  --reading-annotate:     #4a6fa5;
+  --reading-divider:      #d6dfec;
+  /* 冷色学术下代码块用深蓝黑(保留"终端感",又不跳戏到暖棕) */
+  --reading-code-panel-bg:     #1a2233;
+  --reading-code-panel-ink:    #e6ecf5;
+  --reading-code-panel-border: #2a3450;
+}

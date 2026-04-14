@@ -3,19 +3,19 @@
     <!-- Header -->
     <header class="app-header">
       <div class="header-left">
-        <div class="brand" @click="router.push('/')">MIROFISH</div>
+        <div class="brand" @click="router.push('/')">知识工作台</div>
       </div>
       
       <div class="header-center">
         <div class="view-switcher">
           <button 
-            v-for="mode in ['graph', 'split', 'workbench']" 
+            v-for="mode in viewModes" 
             :key="mode"
             class="switch-btn"
             :class="{ active: viewMode === mode }"
             @click="viewMode = mode"
           >
-            {{ { graph: '图谱', split: '双栏', workbench: '工作台' }[mode] }}
+            {{ viewModeLabels[mode] }}
           </button>
         </div>
       </div>
@@ -33,6 +33,13 @@
       </div>
     </header>
 
+    <LegacySurfaceNotice
+      title="旧模拟环境搭建流程"
+      :workspacePath="workspacePath"
+    />
+
+    <Phase1SummaryStrip :taskResult="phase1TaskResult" />
+
     <!-- Main Content Area -->
     <main class="content-area">
       <!-- Left Panel: Graph -->
@@ -41,6 +48,9 @@
           :graphData="graphData"
           :loading="graphLoading"
           :currentPhase="2"
+          :readingStructure="projectData?.reading_structure || null"
+          :schemaEntityTypes="projectData?.ontology?.entity_types || []"
+          :schemaRelationTypes="projectData?.ontology?.edge_types || []"
           @refresh="refreshGraph"
           @toggle-maximize="toggleMaximize('graph')"
         />
@@ -67,9 +77,20 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphPanel from '../components/GraphPanel.vue'
+import Phase1SummaryStrip from '../components/Phase1SummaryStrip.vue'
 import Step2EnvSetup from '../components/Step2EnvSetup.vue'
-import { getProject, getGraphData } from '../api/graph'
+import LegacySurfaceNotice from '../components/common/LegacySurfaceNotice.vue'
+import { getGraphData } from '../api/graph'
 import { getSimulation, stopSimulation, getEnvStatus, closeSimulationEnv } from '../api/simulation'
+import { loadProjectWorkbenchState } from '../utils/projectWorkbenchState'
+import {
+  WORKBENCH_VIEW_LABELS,
+  WORKBENCH_VIEW_MODES,
+  appendWorkbenchLog,
+  buildWorkbenchPanelStyle,
+  toggleWorkbenchMode,
+} from '../utils/workbenchLayout'
+import { resolveWorkbenchStateFromSimulation } from '../utils/workbenchDataLoaders'
 
 const route = useRoute()
 const router = useRouter()
@@ -80,27 +101,26 @@ const props = defineProps({
 })
 
 // Layout State
+const viewModes = WORKBENCH_VIEW_MODES
+const viewModeLabels = WORKBENCH_VIEW_LABELS
 const viewMode = ref('split')
 
 // Data State
 const currentSimulationId = ref(route.params.simulationId)
 const projectData = ref(null)
 const graphData = ref(null)
+const phase1TaskResult = ref(null)
 const graphLoading = ref(false)
 const systemLogs = ref([])
 const currentStatus = ref('processing') // processing | completed | error
 
 // --- Computed Layout Styles ---
 const leftPanelStyle = computed(() => {
-  if (viewMode.value === 'graph') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'workbench') return { width: '0%', opacity: 0, transform: 'translateX(-20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+  return buildWorkbenchPanelStyle(viewMode.value, 'left')
 })
 
 const rightPanelStyle = computed(() => {
-  if (viewMode.value === 'workbench') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'graph') return { width: '0%', opacity: 0, transform: 'translateX(20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+  return buildWorkbenchPanelStyle(viewMode.value, 'right')
 })
 
 // --- Status Computed ---
@@ -114,13 +134,14 @@ const statusText = computed(() => {
   return 'Preparing'
 })
 
+const workspacePath = computed(() => {
+  const projectId = projectData.value?.project_id
+  return projectId ? `/workspace/${projectId}/article` : ''
+})
+
 // --- Helpers ---
 const addLog = (msg) => {
-  const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + new Date().getMilliseconds().toString().padStart(3, '0')
-  systemLogs.value.push({ time, msg })
-  if (systemLogs.value.length > 100) {
-    systemLogs.value.shift()
-  }
+  appendWorkbenchLog(systemLogs, msg, 100)
 }
 
 const updateStatus = (status) => {
@@ -129,11 +150,7 @@ const updateStatus = (status) => {
 
 // --- Layout Methods ---
 const toggleMaximize = (target) => {
-  if (viewMode.value === target) {
-    viewMode.value = 'split'
-  } else {
-    viewMode.value = target
-  }
+  toggleWorkbenchMode(viewMode, target)
 }
 
 const handleGoBack = () => {
@@ -238,27 +255,25 @@ const forceStopSimulation = async () => {
 const loadSimulationData = async () => {
   try {
     addLog(`加载模拟数据: ${currentSimulationId.value}`)
-    
-    // 获取 simulation 信息
-    const simRes = await getSimulation(currentSimulationId.value)
-    if (simRes.success && simRes.data) {
-      const simData = simRes.data
-      
-      // 获取 project 信息
-      if (simData.project_id) {
-        const projRes = await getProject(simData.project_id)
-        if (projRes.success && projRes.data) {
-          projectData.value = projRes.data
-          addLog(`项目加载成功: ${projRes.data.project_id}`)
-          
-          // 获取 graph 数据
-          if (projRes.data.graph_id) {
-            await loadGraph(projRes.data.graph_id)
-          }
-        }
+
+    const result = await resolveWorkbenchStateFromSimulation(currentSimulationId.value, {
+      getSimulation,
+      loadProjectWorkbenchState,
+    })
+
+    if (!result.success) {
+      addLog(`加载模拟数据失败: ${result.error}`)
+      return
+    }
+
+    if (result.workbenchState) {
+      projectData.value = result.workbenchState.project
+      graphData.value = result.workbenchState.graphData
+      phase1TaskResult.value = result.workbenchState.phase1TaskResult
+      addLog(`项目加载成功: ${result.workbenchState.project.project_id}`)
+      if (result.workbenchState.graphData) {
+        addLog('图谱数据加载成功')
       }
-    } else {
-      addLog(`加载模拟数据失败: ${simRes.error || '未知错误'}`)
     }
   } catch (err) {
     addLog(`加载异常: ${err.message}`)
@@ -321,10 +336,10 @@ onMounted(async () => {
 }
 
 .brand {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Noto Sans SC', 'JetBrains Mono', monospace;
   font-weight: 800;
   font-size: 18px;
-  letter-spacing: 1px;
+  letter-spacing: 0.08em;
   cursor: pointer;
 }
 
@@ -431,4 +446,3 @@ onMounted(async () => {
   border-right: 1px solid #EAEAEA;
 }
 </style>
-

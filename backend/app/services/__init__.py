@@ -3,7 +3,9 @@
 """
 
 from .ontology_generator import OntologyGenerator
+from .reading_structure_extractor import ReadingStructureExtractor
 from .graph_builder import GraphBuilderService
+from .zep_graph_builder import ZepGraphBuilderService
 from .text_processor import TextProcessor
 from .zep_entity_reader import ZepEntityReader, EntityNode, FilteredEntities
 from .oasis_profile_generator import OasisProfileGenerator, OasisAgentProfile
@@ -39,7 +41,9 @@ from .simulation_ipc import (
 
 __all__ = [
     'OntologyGenerator', 
+    'ReadingStructureExtractor',
     'GraphBuilderService', 
+    'ZepGraphBuilderService',
     'TextProcessor',
     'ZepEntityReader',
     'EntityNode',
@@ -70,4 +74,3 @@ __all__ = [
     'CommandType',
     'CommandStatus',
 ]
-

@@ -1,0 +1,54 @@
+/*
+ * 水墨留白 · Ink Wash
+ *
+ * 中式极简,黑白灰为主。
+ * 设计意图:纯阅读、导出截图、演示严肃内容。
+ * 注意事项:低饱和,accent 用深墨而非彩色;状态色也要低饱和处理。
+ */
+
+html[data-theme="ink-wash"] {
+  --bg-app:           #f2f1ec;
+  --bg-app-gradient:  linear-gradient(180deg, #f2f1ec 0%, #f6f5f0 36%, #ffffff 100%);
+  --bg-canvas:        #ffffff;
+  --bg-surface:       #fafaf7;
+  --bg-surface-2:     #f2f1ec;
+  --bg-elevated:      #ffffff;
+  --bg-muted:         rgba(38, 36, 32, 0.06);
+  --bg-selected:      linear-gradient(180deg, #ebeae4 0%, #f4f3ee 100%);
+
+  --text-primary:     #262420;
+  --text-secondary:   #5e5a53;
+  --text-muted:       #7c7468;
+  --text-on-accent:   #ffffff;
+
+  --border-default:   #e1ded6;
+  --border-strong:    #b9b2a6;
+  --border-muted:     #edebe5;
+
+  --accent-primary:        #262420;
+  --accent-primary-hover:  #111111;
+  --accent-soft:           rgba(38, 36, 32, 0.08);
+  --accent-group-label:    #5e5a53;
+  --focus-ring:            rgba(38, 36, 32, 0.35);
+
+  --state-warning:    #8a6a2a;
+  --state-danger:     #8a3a2f;
+
+  --input-bg:         #ffffff;
+  --input-border:     #e1ded6;
+  --input-border-focus: #262420;
+
+  /* 纯阅读主题:纸面是最干净的白,字是纯深墨 */
+  --reading-paper:        #ffffff;
+  --reading-ink:          #1a1a1a;
+  --reading-quote-bar:    #262420;
+  --reading-code-bg:      #f2f1ec;
+  --reading-code-border:  #e1ded6;
+  --reading-highlight-bg: rgba(38, 36, 32, 0.10);
+  --reading-annotate:     #5e5a53;
+  --reading-divider:      #e1ded6;
+  /* 水墨主题下代码块用纯深灰,对比最极致 */
+  --reading-code-panel-bg:     #1a1a1a;
+  --reading-code-panel-ink:    #f5f5f2;
+  --reading-code-panel-border: #2d2d2d;
+}

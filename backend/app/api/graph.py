@@ -11,7 +11,29 @@ from flask import request, jsonify
 from . import graph_bp
 from ..config import Config
 from ..services.ontology_generator import OntologyGenerator
-from ..services.graph_builder import GraphBuilderService
+from ..services.reading_structure_extractor import ReadingStructureExtractor
+from ..services.graph_builder import BuildCancelledError
+from ..services.graph_builder_factory import (
+    get_graph_builder,
+    get_graph_builder_provider,
+    validate_graph_builder_config,
+)
+from ..services.workspace.phase1_build_support import (
+    _build_phase1_completion_decision,
+    _build_phase1_task_result,
+    _merge_duplicate_nodes,
+    _normalize_phase1_build_outcome,
+    _normalize_phase1_diagnostics,
+    _normalize_phase1_reading_structure_status,
+    _write_summaries_to_neo4j,
+    _write_supplement_to_neo4j,
+)
+from ..services.graph_access_service import (
+    GRAPH_BACKEND_LOCAL,
+    delete_graph_by_backend,
+    load_graph_data_by_backend,
+    normalize_graph_backend,
+)
 from ..services.text_processor import TextProcessor
 from ..utils.file_parser import FileParser
 from ..utils.logger import get_logger
@@ -48,6 +70,36 @@ def get_project(project_id: str):
     return jsonify({
         "success": True,
         "data": project.to_dict()
+    })
+
+
+@graph_bp.route('/project/<project_id>/text', methods=['GET'])
+def get_project_text(project_id: str):
+    """
+    获取项目提取后的原文文本
+    """
+    project = ProjectManager.get_project(project_id)
+
+    if not project:
+        return jsonify({
+            "success": False,
+            "error": f"项目不存在: {project_id}"
+        }), 404
+
+    text = ProjectManager.get_extracted_text(project_id)
+    if text is None:
+        return jsonify({
+            "success": False,
+            "error": f"项目尚未保存提取文本: {project_id}"
+        }), 404
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "project_id": project_id,
+            "text": text,
+            "char_count": len(text),
+        }
     })
 
 
@@ -106,6 +158,8 @@ def reset_project(project_id: str):
     
     project.graph_id = None
     project.graph_build_task_id = None
+    project.phase1_task_result = None
+    project.reading_structure = None
     project.error = None
     ProjectManager.save_project(project)
     
@@ -153,16 +207,21 @@ def generate_ontology():
         simulation_requirement = request.form.get('simulation_requirement', '')
         project_name = request.form.get('project_name', 'Unnamed Project')
         additional_context = request.form.get('additional_context', '')
-        
+        # vault_relative_dir: 用户选择的 Obsidian vault 子目录(相对 vault 根)。
+        # 空字符串表示不走 vault,沿用 backend/uploads(向后兼容,供未配置 vault 的环境使用)。
+        vault_relative_dir = (request.form.get('vault_relative_dir') or '').strip() or None
+
         logger.debug(f"项目名称: {project_name}")
         logger.debug(f"模拟需求: {simulation_requirement[:100]}...")
-        
+        if vault_relative_dir:
+            logger.info(f"上传目标:Obsidian vault / {vault_relative_dir}")
+
         if not simulation_requirement:
             return jsonify({
                 "success": False,
                 "error": "请提供模拟需求描述 (simulation_requirement)"
             }), 400
-        
+
         # 获取上传的文件
         uploaded_files = request.files.getlist('files')
         if not uploaded_files or all(not f.filename for f in uploaded_files):
@@ -170,30 +229,45 @@ def generate_ontology():
                 "success": False,
                 "error": "请至少上传一个文档文件"
             }), 400
-        
+
         # 创建项目
         project = ProjectManager.create_project(name=project_name)
         project.simulation_requirement = simulation_requirement
         logger.info(f"创建项目: {project.project_id}")
-        
+
         # 保存文件并提取文本
         document_texts = []
         all_text = ""
-        
+
+        # vault 写入失败直接报错(零 fallback),并删除已创建的项目目录
+        from ..services.vault_service import VaultError
+
         for file in uploaded_files:
             if file and file.filename and allowed_file(file.filename):
-                # 保存文件到项目目录
-                file_info = ProjectManager.save_file_to_project(
-                    project.project_id, 
-                    file, 
-                    file.filename
-                )
+                try:
+                    file_info = ProjectManager.save_file_to_project(
+                        project.project_id,
+                        file,
+                        file.filename,
+                        vault_relative_dir=vault_relative_dir,
+                    )
+                except VaultError as ve:
+                    ProjectManager.delete_project(project.project_id)
+                    logger.error(f"vault 写入失败 [{ve.code}]: {ve.message}")
+                    return jsonify({
+                        "success": False,
+                        "error_code": ve.code,
+                        "error": f"Obsidian vault 写入失败:{ve.message}",
+                    }), 400
                 project.files.append({
                     "filename": file_info["original_filename"],
-                    "size": file_info["size"]
+                    "size": file_info["size"],
+                    "source_backend": file_info["source_backend"],
+                    "source_md_path": file_info["source_md_path"],
+                    "vault_relative_dir": file_info["vault_relative_dir"],
                 })
-                
-                # 提取文本
+
+                # 提取文本(FileParser 直接读真源路径,vault 或 uploads 透明)
                 text = FileParser.extract_text(file_info["path"])
                 text = TextProcessor.preprocess_text(text)
                 document_texts.append(text)
@@ -229,6 +303,7 @@ def generate_ontology():
             "entity_types": ontology.get("entity_types", []),
             "edge_types": ontology.get("edge_types", [])
         }
+        project.ontology_metadata = ontology.get("metadata", {})
         project.analysis_summary = ontology.get("analysis_summary", "")
         project.status = ProjectStatus.ONTOLOGY_GENERATED
         ProjectManager.save_project(project)
@@ -240,6 +315,7 @@ def generate_ontology():
                 "project_id": project.project_id,
                 "project_name": project.name,
                 "ontology": project.ontology,
+                "ontology_metadata": project.ontology_metadata,
                 "analysis_summary": project.analysis_summary,
                 "files": project.files,
                 "total_text_length": project.total_text_length
@@ -281,13 +357,13 @@ def build_graph():
     """
     try:
         logger.info("=== 开始构建图谱 ===")
-        
+
+        provider = get_graph_builder_provider()
+
         # 检查配置
-        errors = []
-        if not Config.ZEP_API_KEY:
-            errors.append("ZEP_API_KEY未配置")
+        errors = validate_graph_builder_config(provider)
         if errors:
-            logger.error(f"配置错误: {errors}")
+            logger.error("图谱构建配置错误(provider=%s): %s", provider, errors)
             return jsonify({
                 "success": False,
                 "error": "配置错误: " + "; ".join(errors)
@@ -333,10 +409,12 @@ def build_graph():
             project.status = ProjectStatus.ONTOLOGY_GENERATED
             project.graph_id = None
             project.graph_build_task_id = None
+            project.phase1_task_result = None
+            project.reading_structure = None
             project.error = None
         
         # 获取配置
-        graph_name = data.get('graph_name', project.name or 'MiroFish Graph')
+        graph_name = data.get('graph_name', project.name or 'Knowledge Fabric Graph')
         chunk_size = data.get('chunk_size', project.chunk_size or Config.DEFAULT_CHUNK_SIZE)
         chunk_overlap = data.get('chunk_overlap', project.chunk_overlap or Config.DEFAULT_CHUNK_OVERLAP)
         
@@ -368,84 +446,107 @@ def build_graph():
         # 更新项目状态
         project.status = ProjectStatus.GRAPH_BUILDING
         project.graph_build_task_id = task_id
+        project.phase1_task_result = None
         ProjectManager.save_project(project)
         
         # 启动后台任务
         def build_task():
             build_logger = get_logger('mirofish.build')
             try:
-                build_logger.info(f"[{task_id}] 开始构建图谱...")
+                build_logger.info(f"[{task_id}] 开始构建图谱(provider={provider})...")
                 task_manager.update_task(
-                    task_id, 
+                    task_id,
                     status=TaskStatus.PROCESSING,
-                    message="初始化图谱构建服务..."
+                    message=f"初始化图谱构建服务 ({provider})..."
                 )
-                
-                # 创建图谱构建服务
-                builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
-                
-                # 分块
+
+                builder = get_graph_builder(provider)
+
                 task_manager.update_task(
                     task_id,
                     message="文本分块中...",
                     progress=5
                 )
                 chunks = TextProcessor.split_text(
-                    text, 
-                    chunk_size=chunk_size, 
+                    text,
+                    chunk_size=chunk_size,
                     overlap=chunk_overlap
                 )
                 total_chunks = len(chunks)
-                
-                # 创建图谱
+
                 task_manager.update_task(
                     task_id,
-                    message="创建Zep图谱...",
+                    message="创建图谱...",
                     progress=10
                 )
                 graph_id = builder.create_graph(name=graph_name)
-                
-                # 更新项目的graph_id
+
                 project.graph_id = graph_id
                 ProjectManager.save_project(project)
-                
-                # 设置本体
+
                 task_manager.update_task(
                     task_id,
                     message="设置本体定义...",
                     progress=15
                 )
                 builder.set_ontology(graph_id, ontology)
-                
-                # 添加文本（progress_callback 签名是 (msg, progress_ratio)）
+
+                task_manager.update_task(
+                    task_id,
+                    message="检查存储兼容性...",
+                    progress=18
+                )
+                try:
+                    dropped_constraints = builder.ensure_phase1_storage_compatibility(graph_id)
+                except AttributeError:
+                    dropped_constraints = []
+                    build_logger.debug(f"[{task_id}] builder does not support ensure_phase1_storage_compatibility, skip")
+
                 def add_progress_callback(msg, progress_ratio):
-                    progress = 15 + int(progress_ratio * 40)  # 15% - 55%
+                    progress = 18 + int(progress_ratio * 37)  # 18% - 55%
                     task_manager.update_task(
                         task_id,
                         message=msg,
                         progress=progress
                     )
-                
+
+                def cancel_check() -> bool:
+                    return task_manager.is_cancel_requested(task_id)
+
                 task_manager.update_task(
                     task_id,
                     message=f"开始添加 {total_chunks} 个文本块...",
-                    progress=15
+                    progress=18
                 )
-                
+                # Read batch_size from the currently-active LLM mode snapshot.
+                # Local mode → Config.GRAPHITI_BATCH_SIZE
+                # Online DeepSeek → Config.DEEPSEEK_BATCH_SIZE (can be higher
+                # because DeepSeek has generous concurrency; graphiti batches
+                # serialize across batches, so bigger batch = shorter wall
+                # clock for long articles).
+                try:
+                    from ..services.llm_mode_service import get_graphiti_llm_params
+                    _active_params = get_graphiti_llm_params()
+                    _active_batch_size = max(int(_active_params.get('batch_size') or 1), 1)
+                except Exception:
+                    _active_batch_size = Config.GRAPHITI_BATCH_SIZE
+                build_logger.info(
+                    f"[{task_id}] 使用 batch_size={_active_batch_size} 走 add_text_batches..."
+                )
                 episode_uuids = builder.add_text_batches(
-                    graph_id, 
+                    graph_id,
                     chunks,
-                    batch_size=3,
-                    progress_callback=add_progress_callback
+                    batch_size=_active_batch_size,
+                    progress_callback=add_progress_callback,
+                    cancel_check=cancel_check,
                 )
-                
-                # 等待Zep处理完成（查询每个episode的processed状态）
+
                 task_manager.update_task(
                     task_id,
-                    message="等待Zep处理数据...",
+                    message="等待图谱处理完成...",
                     progress=55
                 )
-                
+
                 def wait_progress_callback(msg, progress_ratio):
                     progress = 55 + int(progress_ratio * 35)  # 55% - 90%
                     task_manager.update_task(
@@ -453,54 +554,337 @@ def build_graph():
                         message=msg,
                         progress=progress
                     )
-                
-                builder._wait_for_episodes(episode_uuids, wait_progress_callback)
-                
-                # 获取图谱数据
+
+                builder._wait_for_episodes(
+                    episode_uuids,
+                    progress_callback=wait_progress_callback
+                )
+
+                diagnostics = _normalize_phase1_diagnostics(
+                    getattr(builder, "get_build_diagnostics", lambda: {})(),
+                    provider=provider,
+                    chunk_count=total_chunks,
+                )
+                if (
+                    diagnostics.get("processed_chunk_count", 0) == 0
+                    and diagnostics.get("aborted_due_to_rate_limit")
+                ):
+                    raise RuntimeError("All chunks failed due to rate limiting")
+
+                task_manager.update_task(
+                    task_id,
+                    message="清理图谱噪声...",
+                    progress=92
+                )
+                try:
+                    builder._run_async(builder.prune_invalid_edges_async(graph_id))
+                except AttributeError:
+                    build_logger.debug(f"[{task_id}] builder does not support prune_invalid_edges_async, skip")
+
                 task_manager.update_task(
                     task_id,
                     message="获取图谱数据...",
                     progress=95
                 )
                 graph_data = builder.get_graph_data(graph_id)
-                
-                # 更新项目状态
-                project.status = ProjectStatus.GRAPH_COMPLETED
-                ProjectManager.save_project(project)
-                
+                diagnostics = _normalize_phase1_diagnostics(
+                    getattr(builder, "get_build_diagnostics", lambda: {})(),
+                    provider=provider,
+                    chunk_count=total_chunks,
+                    dropped_constraints=dropped_constraints,
+                )
+
                 node_count = graph_data.get("node_count", 0)
                 edge_count = graph_data.get("edge_count", 0)
+
+                # === 质量检查与定向补抽 ===
+                if provider == "local" and node_count > 0:
+                    try:
+                        from ..services.graph_quality_gate import GraphQualityGate
+                        quality_gate = GraphQualityGate()
+                        assessment = quality_gate.assess(graph_data, ontology, text)
+                        if assessment.should_supplement:
+                            task_manager.update_task(
+                                task_id,
+                                message=f"质量检查: 补充抽取 {', '.join(assessment.missing_types)}...",
+                                progress=93,
+                            )
+                            supplement = quality_gate.supplement(
+                                missing_types=assessment.missing_types,
+                                document_text=text,
+                                ontology=ontology,
+                                existing_nodes=graph_data.get("nodes", []),
+                            )
+                            if supplement.new_nodes:
+                                # 写入 Neo4j
+                                _write_supplement_to_neo4j(
+                                    builder, graph_id, supplement
+                                )
+                                # 重新获取图谱数据
+                                graph_data = builder.get_graph_data(graph_id)
+                                node_count = graph_data.get("node_count", 0)
+                                edge_count = graph_data.get("edge_count", 0)
+                                build_logger.info(
+                                    f"[{task_id}] 补抽后: {node_count} 节点, {edge_count} 边 "
+                                    f"(补充了 {len(supplement.new_nodes)} 节点, {len(supplement.new_edges)} 边)"
+                                )
+                    except Exception as gate_exc:
+                        build_logger.warning(f"[{task_id}] 质量检查/补抽失败(不影响原图谱): {gate_exc}")
+
+                # === 节点去重：合并名称高度相似的节点 ===
+                if provider == "local" and node_count > 0:
+                    try:
+                        from ..services.graph_quality_gate import GraphQualityGate as _DedupGate
+                        dupes = _DedupGate.find_near_duplicates(graph_data, threshold=0.70)
+                        if dupes:
+                            build_logger.info(
+                                f"[{task_id}] 发现 {len(dupes)} 对近似重复节点，开始合并"
+                            )
+                            _merge_duplicate_nodes(builder, graph_id, dupes, build_logger=build_logger)
+                            graph_data = builder.get_graph_data(graph_id)
+                            node_count = graph_data.get("node_count", 0)
+                            edge_count = graph_data.get("edge_count", 0)
+                    except Exception as dedup_exc:
+                        build_logger.warning(f"[{task_id}] 节点去重失败(不影响原图谱): {dedup_exc}")
+
+                # === Summary 回填：为空 summary 节点补充描述 ===
+                summary_backfill_meta = {
+                    "summary_backfill_requested": 0,
+                    "summary_backfill_completed": 0,
+                    "summary_backfill_missing": [],
+                    "summary_backfill_error": "",
+                }
+                if provider == "local" and node_count > 0:
+                    try:
+                        from ..services.graph_quality_gate import GraphQualityGate as _SummaryGate
+                        _sg = _SummaryGate()
+                        backfilled = _sg.backfill_summaries(
+                            graph_data=graph_data,
+                            document_text=text,
+                        )
+                        meta = dict(getattr(_sg, "last_summary_backfill_meta", {}) or {})
+                        summary_backfill_meta["summary_backfill_requested"] = max(
+                            int(meta.get("requested") or 0), 0
+                        )
+                        summary_backfill_meta["summary_backfill_completed"] = max(
+                            int(meta.get("completed") or 0), 0
+                        )
+                        summary_backfill_meta["summary_backfill_missing"] = list(
+                            meta.get("missing") or []
+                        )
+                        if backfilled:
+                            _write_summaries_to_neo4j(builder, graph_id, backfilled)
+                            graph_data = builder.get_graph_data(graph_id)
+                            node_count = graph_data.get("node_count", 0)
+                            edge_count = graph_data.get("edge_count", 0)
+                            remaining_empty_names = [
+                                (node.get("name") or "").strip()
+                                for node in graph_data.get("nodes", [])
+                                if not (node.get("summary") or "").strip()
+                            ]
+                            summary_backfill_meta["summary_backfill_missing"] = [
+                                name for name in remaining_empty_names if name
+                            ]
+                            summary_backfill_meta["summary_backfill_completed"] = max(
+                                summary_backfill_meta["summary_backfill_requested"]
+                                - len(summary_backfill_meta["summary_backfill_missing"]),
+                                0,
+                            )
+                            build_logger.info(
+                                f"[{task_id}] summary 回填: {len(backfilled)} 个节点"
+                            )
+                    except Exception as sf_exc:
+                        summary_backfill_meta["summary_backfill_error"] = str(sf_exc)[:300]
+                        build_logger.warning(f"[{task_id}] summary 回填失败: {sf_exc}")
+
+                diagnostics.update(summary_backfill_meta)
+                diagnostics = _normalize_phase1_diagnostics(
+                    diagnostics,
+                    provider=provider,
+                    chunk_count=total_chunks,
+                    dropped_constraints=dropped_constraints,
+                )
+
+                completion_decision = _normalize_phase1_build_outcome(
+                    _build_phase1_completion_decision(diagnostics, graph_data)
+                )
+                if diagnostics.get("summary_backfill_error"):
+                    completion_decision = dict(completion_decision)
+                    completion_decision.setdefault("warnings", [])
+                    completion_decision["warnings"].append(
+                        f"summary 回填失败: {diagnostics['summary_backfill_error']}"
+                    )
+                    if completion_decision["status"] == "completed":
+                        completion_decision["status"] = "completed_with_warnings"
+                elif diagnostics.get("summary_backfill_missing"):
+                    completion_decision = dict(completion_decision)
+                    completion_decision.setdefault("warnings", [])
+                    completion_decision["warnings"].append(
+                        "summary 回填未覆盖 "
+                        f"{len(diagnostics['summary_backfill_missing'])}/"
+                        f"{diagnostics.get('summary_backfill_requested', 0)} 个节点"
+                    )
+                    if completion_decision["status"] == "completed":
+                        completion_decision["status"] = "completed_with_warnings"
+
+                reading_structure_status = {
+                    "status": "not_started",
+                    "reason": "",
+                }
+
+                if completion_decision["can_generate_reading_structure"]:
+                    task_manager.update_task(
+                        task_id,
+                        message="整理阅读骨架...",
+                        progress=97
+                    )
+                    try:
+                        extractor = ReadingStructureExtractor()
+                        reading_structure = extractor.extract(
+                            project_name=project.name or graph_name,
+                            document_text=text,
+                            analysis_summary=project.analysis_summary or "",
+                            ontology=ontology,
+                            graph_data=graph_data,
+                            simulation_requirement=project.simulation_requirement or "",
+                        )
+                        project.reading_structure = reading_structure
+                        reading_structure_status = _normalize_phase1_reading_structure_status(
+                            dict(getattr(extractor, "last_result_meta", {}) or {})
+                        )
+                        ProjectManager.save_project(project)
+                    except Exception as reading_exc:
+                        reading_structure_status = {
+                            "status": "failed",
+                            "reason": str(reading_exc)[:300],
+                        }
+                        build_logger.warning(f"[{task_id}] 阅读骨架提取失败，将继续保留图谱结果: {reading_exc}")
+                else:
+                    reading_structure_status = {
+                        "status": "skipped",
+                        "reason": completion_decision["reason"] or "图谱完整度不足，跳过阅读骨架生成",
+                    }
+                    project.reading_structure = None
+                    ProjectManager.save_project(project)
+
+                reading_structure_status = _normalize_phase1_reading_structure_status(reading_structure_status)
+                if reading_structure_status.get("status") != "generated":
+                    completion_decision = dict(completion_decision)
+                    completion_decision.setdefault("warnings", [])
+                    completion_decision["warnings"].append(
+                        f"阅读骨架状态: {reading_structure_status.get('status', 'unknown')}"
+                    )
+                    if completion_decision["status"] == "completed":
+                        completion_decision["status"] = "completed_with_warnings"
+
+                if completion_decision["status"] == "failed":
+                    raise RuntimeError(completion_decision["reason"])
+
+                project.status = ProjectStatus.GRAPH_COMPLETED
+                project.error = None
+                ProjectManager.save_project(project)
+
                 build_logger.info(f"[{task_id}] 图谱构建完成: graph_id={graph_id}, 节点={node_count}, 边={edge_count}")
-                
-                # 完成
+
+                phase1_result = _build_phase1_task_result(
+                    provider=provider,
+                    project_id=project_id,
+                    graph_id=graph_id,
+                    chunk_count=total_chunks,
+                    node_count=node_count,
+                    edge_count=edge_count,
+                    diagnostics=diagnostics,
+                    build_outcome=completion_decision,
+                    reading_structure_status=reading_structure_status,
+                    dropped_constraints=dropped_constraints,
+                )
+
+                project.phase1_task_result = phase1_result
+                ProjectManager.save_project(project)
+
                 task_manager.update_task(
                     task_id,
                     status=TaskStatus.COMPLETED,
-                    message="图谱构建完成",
+                    message=(
+                        "图谱构建完成"
+                        if completion_decision["status"] == "completed"
+                        else "图谱构建完成（有告警）"
+                    ),
                     progress=100,
-                    result={
-                        "project_id": project_id,
-                        "graph_id": graph_id,
-                        "node_count": node_count,
-                        "edge_count": edge_count,
-                        "chunk_count": total_chunks
-                    }
+                    result=phase1_result,
                 )
-                
+            except BuildCancelledError as cancel_exc:
+                build_logger.info(
+                    f"[{task_id}] 图谱构建被取消(provider={provider}): {cancel_exc}"
+                )
+                project.status = ProjectStatus.FAILED
+                project.error = f"cancelled: {cancel_exc}"
+                ProjectManager.save_project(project)
+
+                cancel_result = _build_phase1_task_result(
+                    provider=provider,
+                    project_id=project_id,
+                    graph_id=project.graph_id,
+                    chunk_count=locals().get("total_chunks", 0),
+                    node_count=locals().get("node_count", 0),
+                    edge_count=locals().get("edge_count", 0),
+                    diagnostics=locals().get("diagnostics")
+                    or getattr(locals().get("builder"), "get_build_diagnostics", lambda: {})(),
+                    build_outcome={
+                        "status": "cancelled",
+                        "reason": str(cancel_exc),
+                        "success_ratio": (
+                            cancel_exc.processed_chunks / cancel_exc.total_chunks
+                            if cancel_exc.total_chunks
+                            else 0.0
+                        ),
+                        "can_generate_reading_structure": False,
+                        "warnings": [],
+                    },
+                    reading_structure_status=locals().get("reading_structure_status"),
+                    dropped_constraints=locals().get("dropped_constraints"),
+                )
+                project.phase1_task_result = cancel_result
+                ProjectManager.save_project(project)
+                task_manager.mark_cancelled(task_id, reason=str(cancel_exc))
             except Exception as e:
-                # 更新项目状态为失败
-                build_logger.error(f"[{task_id}] 图谱构建失败: {str(e)}")
+                build_logger.error(f"[{task_id}] 图谱构建失败(provider={provider}): {str(e)}")
                 build_logger.debug(traceback.format_exc())
-                
+
                 project.status = ProjectStatus.FAILED
                 project.error = str(e)
                 ProjectManager.save_project(project)
-                
+
+                failure_result = _build_phase1_task_result(
+                    provider=provider,
+                    project_id=project_id,
+                    graph_id=project.graph_id,
+                    chunk_count=locals().get("total_chunks", 0),
+                    node_count=locals().get("node_count", 0),
+                    edge_count=locals().get("edge_count", 0),
+                    diagnostics=locals().get("diagnostics")
+                    or getattr(locals().get("builder"), "get_build_diagnostics", lambda: {})(),
+                    build_outcome=locals().get("completion_decision")
+                    or {
+                        "status": "failed",
+                        "reason": str(e),
+                        "success_ratio": 0.0,
+                        "can_generate_reading_structure": False,
+                        "warnings": [],
+                    },
+                    reading_structure_status=locals().get("reading_structure_status"),
+                    dropped_constraints=locals().get("dropped_constraints"),
+                )
+
+                project.phase1_task_result = failure_result
+                ProjectManager.save_project(project)
+
                 task_manager.update_task(
                     task_id,
                     status=TaskStatus.FAILED,
                     message=f"构建失败: {str(e)}",
-                    error=traceback.format_exc()
+                    error=traceback.format_exc(),
+                    result=failure_result,
                 )
         
         # 启动后台线程
@@ -532,16 +916,57 @@ def get_task(task_id: str):
     查询任务状态
     """
     task = TaskManager().get_task(task_id)
-    
+
     if not task:
         return jsonify({
             "success": False,
             "error": f"任务不存在: {task_id}"
         }), 404
-    
+
     return jsonify({
         "success": True,
         "data": task.to_dict()
+    })
+
+
+@graph_bp.route('/task/<task_id>/cancel', methods=['POST'])
+def cancel_task(task_id: str):
+    """Cooperative cancel for a long-running task.
+
+    The graph build runs in a daemon thread we cannot safely kill from
+    the outside. This endpoint instead sets a ``cancel_requested`` flag
+    on the task record. The worker checks the flag at each chunk
+    boundary and exits voluntarily, leaving the in-flight LLM call to
+    finish before the thread returns.
+
+    Request body (optional): ``{"reason": "..."}``
+
+    Returns 200 with ``{"success": true, "cancel_requested": true}``
+    when the flag was set, 404 when the task is unknown, and 409 when
+    the task is already in a terminal state.
+    """
+    body = request.get_json(silent=True) or {}
+    reason = (body.get("reason") or "").strip()
+
+    manager = TaskManager()
+    task = manager.get_task(task_id)
+    if task is None:
+        return jsonify({
+            "success": False,
+            "error": f"任务不存在: {task_id}",
+        }), 404
+
+    if not manager.request_cancel(task_id, reason=reason):
+        return jsonify({
+            "success": False,
+            "error": f"任务无法取消（当前状态: {task.status.value}）",
+            "data": task.to_dict(),
+        }), 409
+
+    refreshed = manager.get_task(task_id)
+    return jsonify({
+        "success": True,
+        "data": refreshed.to_dict() if refreshed else None,
     })
 
 
@@ -554,7 +979,7 @@ def list_tasks():
     
     return jsonify({
         "success": True,
-        "data": [t.to_dict() for t in tasks],
+        "data": tasks,
         "count": len(tasks)
     })
 
@@ -567,18 +992,20 @@ def get_graph_data(graph_id: str):
     获取图谱数据（节点和边）
     """
     try:
-        if not Config.ZEP_API_KEY:
-            return jsonify({
-                "success": False,
-                "error": "ZEP_API_KEY未配置"
-            }), 500
-        
-        builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
-        graph_data = builder.get_graph_data(graph_id)
+        backend = normalize_graph_backend(request.args.get("backend", GRAPH_BACKEND_LOCAL))
+    except ValueError as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+        }), 400
+
+    try:
+        graph_data = load_graph_data_by_backend(graph_id, backend=backend)
         
         return jsonify({
             "success": True,
-            "data": graph_data
+            "data": graph_data,
+            "backend": backend,
         })
         
     except Exception as e:
@@ -592,21 +1019,23 @@ def get_graph_data(graph_id: str):
 @graph_bp.route('/delete/<graph_id>', methods=['DELETE'])
 def delete_graph(graph_id: str):
     """
-    删除Zep图谱
+    删除图谱
     """
     try:
-        if not Config.ZEP_API_KEY:
-            return jsonify({
-                "success": False,
-                "error": "ZEP_API_KEY未配置"
-            }), 500
-        
-        builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
-        builder.delete_graph(graph_id)
+        backend = normalize_graph_backend(request.args.get("backend", GRAPH_BACKEND_LOCAL))
+    except ValueError as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+        }), 400
+
+    try:
+        delete_graph_by_backend(graph_id, backend=backend)
         
         return jsonify({
             "success": True,
-            "message": f"图谱已删除: {graph_id}"
+            "message": f"图谱已删除: {graph_id}",
+            "backend": backend,
         })
         
     except Exception as e:

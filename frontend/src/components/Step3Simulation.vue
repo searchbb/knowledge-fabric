@@ -97,7 +97,7 @@
           @click="handleNextStep"
         >
           <span v-if="isGeneratingReport" class="loading-spinner-small"></span>
-          {{ isGeneratingReport ? '启动中...' : '开始生成结果报告' }} 
+          {{ isGeneratingReport ? '启动中...' : '开始生成旧结果报告' }} 
           <span v-if="!isGeneratingReport" class="arrow-icon">→</span>
         </button>
       </div>

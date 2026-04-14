@@ -1,5 +1,5 @@
 """
-MiroFish Backend - Flask应用工厂
+Knowledge Fabric Backend - Flask应用工厂
 """
 
 import os
@@ -36,7 +36,7 @@ def create_app(config_class=Config):
     
     if should_log_startup:
         logger.info("=" * 50)
-        logger.info("MiroFish Backend 启动中...")
+        logger.info("Knowledge Fabric Backend 启动中...")
         logger.info("=" * 50)
     
     # 启用CORS
@@ -63,18 +63,31 @@ def create_app(config_class=Config):
         return response
     
     # 注册蓝图
-    from .api import graph_bp, simulation_bp, report_bp
+    from .api import graph_bp, simulation_bp, report_bp, review_bp, concept_bp, theme_bp, evolution_bp, registry_bp
+    from .api.routes.auto_pipeline import auto_pipeline_bp
+    from .api.routes.llm_mode_config import llm_mode_config_bp
+    from .api.routes.vault import vault_bp
+    from .api.routes.article_raw import article_raw_bp
     app.register_blueprint(graph_bp, url_prefix='/api/graph')
     app.register_blueprint(simulation_bp, url_prefix='/api/simulation')
     app.register_blueprint(report_bp, url_prefix='/api/report')
+    app.register_blueprint(review_bp, url_prefix='/api/review')
+    app.register_blueprint(concept_bp, url_prefix='/api/concept')
+    app.register_blueprint(theme_bp, url_prefix='/api/theme')
+    app.register_blueprint(evolution_bp, url_prefix='/api/evolution')
+    app.register_blueprint(registry_bp, url_prefix='/api/registry')
+    # auto_pipeline_bp / llm_mode_config_bp / vault_bp / article_raw_bp 都自带 /api/* prefix
+    app.register_blueprint(auto_pipeline_bp)
+    app.register_blueprint(llm_mode_config_bp)
+    app.register_blueprint(vault_bp)
+    app.register_blueprint(article_raw_bp)
     
     # 健康检查
     @app.route('/health')
     def health():
-        return {'status': 'ok', 'service': 'MiroFish Backend'}
+        return {'status': 'ok', 'service': 'Knowledge Fabric Backend'}
     
     if should_log_startup:
-        logger.info("MiroFish Backend 启动完成")
+        logger.info("Knowledge Fabric Backend 启动完成")
     
     return app
-

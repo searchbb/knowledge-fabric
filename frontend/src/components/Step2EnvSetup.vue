@@ -440,7 +440,7 @@
             <div class="rounds-header">
               <div class="header-left">
                 <span class="section-title">模拟轮数设定</span>
-                <span class="section-desc">MiroFish 自动规划推演现实 <span class="desc-highlight">{{ simulationConfig?.time_config?.total_simulation_hours || '-' }}</span> 小时，每轮代表现实 <span class="desc-highlight">{{ simulationConfig?.time_config?.minutes_per_round || '-' }}</span> 分钟时间流逝</span>
+                <span class="section-desc">知识工作台 自动规划推演现实 <span class="desc-highlight">{{ simulationConfig?.time_config?.total_simulation_hours || '-' }}</span> 小时，每轮代表现实 <span class="desc-highlight">{{ simulationConfig?.time_config?.minutes_per_round || '-' }}</span> 分钟时间流逝</span>
               </div>
               <label class="switch-control">
                 <input type="checkbox" v-model="useCustomRounds">
@@ -521,9 +521,12 @@
               :disabled="phase < 4"
               @click="handleStartSimulation"
             >
-              开始双世界并行模拟 ➝
+              开始旧双世界并行模拟 ➝
             </button>
           </div>
+          <p class="legacy-note">
+            当前仍是兼容实验路径，后续会与 Phase 2 主工作台继续解耦。
+          </p>
         </div>
       </div>
     </div>
@@ -1230,6 +1233,13 @@ onUnmounted(() => {
 
 .action-group.dual .action-btn {
   width: 100%;
+}
+
+.legacy-note {
+  margin: 14px 4px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #8B6C4A;
 }
 
 /* Info Card */

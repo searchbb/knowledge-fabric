@@ -10,6 +10,11 @@ from flask import request, jsonify, send_file
 
 from . import report_bp
 from ..config import Config
+from ..services.legacy_surface_flags import (
+    LEGACY_SURFACE_REPORTING,
+    build_legacy_surface_disabled_payload,
+    is_legacy_surface_enabled,
+)
 from ..services.report_agent import ReportAgent, ReportManager, ReportStatus
 from ..services.simulation_manager import SimulationManager
 from ..models.project import ProjectManager
@@ -17,6 +22,13 @@ from ..models.task import TaskManager, TaskStatus
 from ..utils.logger import get_logger
 
 logger = get_logger('mirofish.api.report')
+
+
+@report_bp.before_request
+def _ensure_report_surface_enabled():
+    if is_legacy_surface_enabled(LEGACY_SURFACE_REPORTING):
+        return None
+    return jsonify(build_legacy_surface_disabled_payload(LEGACY_SURFACE_REPORTING)), 410
 
 
 # ============== 报告生成接口 ==============

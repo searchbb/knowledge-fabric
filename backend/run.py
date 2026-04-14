@@ -1,5 +1,5 @@
 """
-MiroFish Backend 启动入口
+Knowledge Fabric Backend 启动入口
 """
 
 import os
@@ -42,9 +42,10 @@ def main():
     debug = Config.DEBUG
     
     # 启动服务
-    app.run(host=host, port=port, debug=debug, threaded=True)
+    # Long-running graph builds run in daemon threads and keep task state in
+    # memory, so Werkzeug's stat reloader would orphan them on every reload.
+    app.run(host=host, port=port, debug=debug, threaded=True, use_reloader=False)
 
 
 if __name__ == '__main__':
     main()
-

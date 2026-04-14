@@ -152,36 +152,44 @@
 
             <!-- 导航按钮 -->
             <div class="modal-actions">
-              <button 
-                class="modal-btn btn-project" 
+              <button
+                class="modal-btn btn-project"
                 @click="goToProject"
                 :disabled="!selectedProject.project_id"
               >
-                <span class="btn-step">Step1</span>
                 <span class="btn-icon">◇</span>
                 <span class="btn-text">图谱构建</span>
               </button>
-              <button 
-                class="modal-btn btn-simulation" 
-                @click="goToSimulation"
+              <button
+                class="modal-btn btn-workspace"
+                @click="goToWorkspace"
+                :disabled="!selectedProject.project_id"
               >
-                <span class="btn-step">Step2</span>
-                <span class="btn-icon">◈</span>
-                <span class="btn-text">环境搭建</span>
-              </button>
-              <button 
-                class="modal-btn btn-report" 
-                @click="goToReport"
-                :disabled="!selectedProject.report_id"
-              >
-                <span class="btn-step">Step4</span>
-                <span class="btn-icon">◆</span>
-                <span class="btn-text">分析报告</span>
+                <span class="btn-icon">⬡</span>
+                <span class="btn-text">Phase 2 工作台</span>
               </button>
             </div>
-            <!-- 不可回放提示 -->
-            <div class="modal-playback-hint">
-              <span class="hint-text">Step3「开始模拟」与 Step5「深度互动」需在运行中启动，不支持历史回放</span>
+            <div class="modal-legacy-section">
+              <div class="legacy-section-label">旧兼容链路</div>
+              <div class="modal-actions modal-actions--legacy">
+                <button
+                  class="modal-btn btn-legacy"
+                  @click="goToSimulation"
+                >
+                  <span class="btn-icon">◈</span>
+                  <span class="btn-text">环境搭建</span>
+                  <span class="btn-badge">legacy</span>
+                </button>
+                <button
+                  class="modal-btn btn-legacy"
+                  @click="goToReport"
+                  :disabled="!selectedProject.report_id"
+                >
+                  <span class="btn-icon">◆</span>
+                  <span class="btn-text">分析报告</span>
+                  <span class="btn-badge">legacy</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -412,7 +420,17 @@ const goToProject = () => {
   }
 }
 
-// 导航到环境配置页面（Simulation）
+// 导航到 Phase 2 工作台
+const goToWorkspace = () => {
+  if (selectedProject.value?.project_id) {
+    router.push({
+      path: `/workspace/${selectedProject.value.project_id}/article`
+    })
+    closeModal()
+  }
+}
+
+// 导航到环境配置页面（Simulation）— legacy
 const goToSimulation = () => {
   if (selectedProject.value?.simulation_id) {
     router.push({
@@ -1313,28 +1331,59 @@ onUnmounted(() => {
 }
 
 .modal-btn.btn-project .btn-icon { color: #3B82F6; }
-.modal-btn.btn-simulation .btn-icon { color: #F59E0B; }
-.modal-btn.btn-report .btn-icon { color: #10B981; }
-
-.modal-btn:hover:not(:disabled) .btn-text {
-  color: #111827;
+.modal-btn.btn-workspace .btn-icon { color: #6366F1; }
+.modal-btn.btn-workspace {
+  border-color: rgba(99, 102, 241, 0.25);
+  background: rgba(238, 242, 255, 0.5);
+}
+.modal-btn.btn-workspace:hover:not(:disabled) {
+  border-color: #6366F1;
 }
 
-/* 不可回放提示 */
-.modal-playback-hint {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* legacy 分区 */
+.modal-legacy-section {
   padding: 0 32px 20px;
   background: #FFFFFF;
 }
 
-.hint-text {
+.legacy-section-label {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.7rem;
-  color: #9CA3AF;
-  letter-spacing: 0.3px;
-  text-align: center;
-  line-height: 1.5;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #9a5c12;
+  margin-bottom: 8px;
+}
+
+.modal-actions--legacy {
+  padding: 0;
+}
+
+.modal-btn.btn-legacy {
+  position: relative;
+  border-color: rgba(189, 136, 56, 0.18);
+  background: rgba(255, 251, 242, 0.6);
+}
+
+.modal-btn.btn-legacy .btn-icon { color: #9a5c12; opacity: 0.6; }
+.modal-btn.btn-legacy .btn-text { color: #6f5a45; }
+
+.modal-btn.btn-legacy:hover:not(:disabled) {
+  border-color: rgba(189, 136, 56, 0.4);
+}
+
+.btn-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #9a5c12;
+  background: rgba(189, 136, 56, 0.12);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.modal-btn:hover:not(:disabled) .btn-text {
+  color: #111827;
 }
 </style>

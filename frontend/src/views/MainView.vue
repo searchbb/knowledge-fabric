@@ -3,19 +3,19 @@
     <!-- Header -->
     <header class="app-header">
       <div class="header-left">
-        <div class="brand" @click="router.push('/')">MIROFISH</div>
+        <div class="brand" @click="router.push('/')">知识工作台</div>
       </div>
       
       <div class="header-center">
         <div class="view-switcher">
           <button 
-            v-for="mode in ['graph', 'split', 'workbench']" 
+            v-for="mode in viewModes" 
             :key="mode"
             class="switch-btn"
             :class="{ active: viewMode === mode }"
             @click="viewMode = mode"
           >
-            {{ { graph: '图谱', split: '双栏', workbench: '工作台' }[mode] }}
+            {{ viewModeLabels[mode] }}
           </button>
         </div>
       </div>
@@ -37,12 +37,19 @@
     <main class="content-area">
       <!-- Left Panel: Graph -->
       <div class="panel-wrapper left" :style="leftPanelStyle">
-        <GraphPanel 
+        <GraphPanel
           :graphData="graphData"
           :loading="graphLoading"
           :currentPhase="currentPhase"
+          :initialView="graphPanelView"
+          :readingStructure="projectData?.reading_structure || null"
+          :schemaEntityTypes="projectData?.ontology?.entity_types || []"
+          :schemaRelationTypes="projectData?.ontology?.edge_types || []"
+          :focusNodeKey="route.query.focusNode || ''"
+          :fromSource="route.query.from || ''"
           @refresh="refreshGraph"
           @toggle-maximize="toggleMaximize('graph')"
+          @view-change="handleGraphPanelViewChange"
         />
       </div>
 
@@ -55,6 +62,7 @@
           :projectData="projectData"
           :ontologyProgress="ontologyProgress"
           :buildProgress="buildProgress"
+          :buildError="error"
           :graphData="graphData"
           :systemLogs="systemLogs"
           @next-step="handleNextStep"
@@ -75,19 +83,32 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphPanel from '../components/GraphPanel.vue'
 import Step1GraphBuild from '../components/Step1GraphBuild.vue'
 import Step2EnvSetup from '../components/Step2EnvSetup.vue'
 import { generateOntology, getProject, buildGraph, getTaskStatus, getGraphData } from '../api/graph'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
+import {
+  WORKBENCH_VIEW_LABELS,
+  WORKBENCH_VIEW_MODES,
+  appendWorkbenchLog,
+  buildWorkbenchPanelStyle,
+  normalizeGraphPanelView,
+  normalizeLayoutMode,
+  toggleWorkbenchMode,
+} from '../utils/workbenchLayout'
 
 const route = useRoute()
 const router = useRouter()
 
+const viewModes = WORKBENCH_VIEW_MODES
+const viewModeLabels = WORKBENCH_VIEW_LABELS
+
 // Layout State
-const viewMode = ref('split') // graph | split | workbench
+const viewMode = ref(normalizeLayoutMode(route.query.mode)) // graph | split | workbench
+const graphPanelView = ref(normalizeGraphPanelView(route.query.view))
 
 // Step State
 const currentStep = ref(1) // 1: 图谱构建, 2: 环境搭建, 3: 开始模拟, 4: 报告生成, 5: 深度互动
@@ -111,15 +132,11 @@ let graphPollTimer = null
 
 // --- Computed Layout Styles ---
 const leftPanelStyle = computed(() => {
-  if (viewMode.value === 'graph') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'workbench') return { width: '0%', opacity: 0, transform: 'translateX(-20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+  return buildWorkbenchPanelStyle(viewMode.value, 'left')
 })
 
 const rightPanelStyle = computed(() => {
-  if (viewMode.value === 'workbench') return { width: '100%', opacity: 1, transform: 'translateX(0)' }
-  if (viewMode.value === 'graph') return { width: '0%', opacity: 0, transform: 'translateX(20px)' }
-  return { width: '50%', opacity: 1, transform: 'translateX(0)' }
+  return buildWorkbenchPanelStyle(viewMode.value, 'right')
 })
 
 // --- Status Computed ---
@@ -139,21 +156,44 @@ const statusText = computed(() => {
 
 // --- Helpers ---
 const addLog = (msg) => {
-  const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + new Date().getMilliseconds().toString().padStart(3, '0')
-  systemLogs.value.push({ time, msg })
-  // Keep last 100 logs
-  if (systemLogs.value.length > 100) {
-    systemLogs.value.shift()
-  }
+  appendWorkbenchLog(systemLogs, msg, 100)
 }
 
 // --- Layout Methods ---
 const toggleMaximize = (target) => {
-  if (viewMode.value === target) {
-    viewMode.value = 'split'
-  } else {
-    viewMode.value = target
+  toggleWorkbenchMode(viewMode, target)
+}
+
+const handleGraphPanelViewChange = (nextView) => {
+  graphPanelView.value = normalizeGraphPanelView(nextView)
+}
+
+const syncRouteQuery = async () => {
+  const currentLayout = normalizeLayoutMode(route.query.mode)
+  const currentGraphView = normalizeGraphPanelView(route.query.view)
+
+  if (currentLayout === viewMode.value && currentGraphView === graphPanelView.value) {
+    return
   }
+
+  const nextQuery = { ...route.query }
+  if (viewMode.value === 'split') {
+    delete nextQuery.mode
+  } else {
+    nextQuery.mode = viewMode.value
+  }
+
+  if (graphPanelView.value === 'graph') {
+    delete nextQuery.view
+  } else {
+    nextQuery.view = graphPanelView.value
+  }
+
+  await router.replace({
+    name: route.name,
+    params: route.params,
+    query: nextQuery,
+  })
 }
 
 const handleNextStep = (params = {}) => {
@@ -203,6 +243,9 @@ const handleNewProject = async () => {
     const formData = new FormData()
     pending.files.forEach(f => formData.append('files', f))
     formData.append('simulation_requirement', pending.simulationRequirement)
+    if (pending.vaultRelativeDir) {
+      formData.append('vault_relative_dir', pending.vaultRelativeDir)
+    }
     
     const res = await generateOntology(formData)
     if (res.success) {
@@ -235,6 +278,11 @@ const loadProject = async () => {
       projectData.value = res.data
       updatePhaseByStatus(res.data.status)
       addLog(`Project loaded. Status: ${res.data.status}`)
+      restoreProjectBuildSnapshot(res.data)
+
+      if (res.data.graph_build_task_id) {
+        await restoreBuildTaskSnapshot(res.data.graph_build_task_id)
+      }
       
       if (res.data.status === 'ontology_generated' && !res.data.graph_id) {
         await startBuildGraph()
@@ -258,6 +306,48 @@ const loadProject = async () => {
   }
 }
 
+const setBuildTaskState = (task) => {
+  if (!task) return null
+  const nextResult = task.result || buildProgress.value?.result || null
+  buildProgress.value = {
+    progress: task.progress || 0,
+    message: task.message,
+    status: task.status,
+    result: nextResult,
+  }
+  return nextResult
+}
+
+const restoreProjectBuildSnapshot = (projectSnapshot) => {
+  const nextResult = projectSnapshot?.phase1_task_result
+  if (!nextResult) return null
+
+  buildProgress.value = {
+    progress: projectSnapshot?.status === 'graph_completed' ? 100 : (buildProgress.value?.progress || 0),
+    message: buildProgress.value?.message || 'Restored from persisted Phase 1 snapshot',
+    status: nextResult?.build_outcome?.status || buildProgress.value?.status || 'completed',
+    result: nextResult,
+  }
+  return nextResult
+}
+
+const restoreBuildTaskSnapshot = async (taskId) => {
+  try {
+    const res = await getTaskStatus(taskId)
+    if (!res.success) return null
+
+    const task = res.data
+    const nextResult = setBuildTaskState(task)
+    if (task.status === 'failed' && !error.value) {
+      error.value = nextResult?.build_outcome?.reason || task.message || task.error || 'Graph build failed'
+    }
+    return task
+  } catch (err) {
+    console.warn('Failed to restore build task snapshot:', err)
+    return null
+  }
+}
+
 const updatePhaseByStatus = (status) => {
   switch (status) {
     case 'created':
@@ -271,7 +361,13 @@ const updatePhaseByStatus = (status) => {
 const startBuildGraph = async () => {
   try {
     currentPhase.value = 1
-    buildProgress.value = { progress: 0, message: 'Starting build...' }
+    error.value = ''
+    buildProgress.value = {
+      progress: 0,
+      message: 'Starting build...',
+      status: 'processing',
+      result: null,
+    }
     addLog('Initiating graph build...')
     
     const res = await buildGraph({ project_id: currentProjectId.value })
@@ -323,16 +419,18 @@ const pollTaskStatus = async (taskId) => {
     const res = await getTaskStatus(taskId)
     if (res.success) {
       const task = res.data
+      const previousMessage = buildProgress.value?.message
+      const nextResult = setBuildTaskState(task)
       
       // Log progress message if it changed
-      if (task.message && task.message !== buildProgress.value?.message) {
+      if (task.message && task.message !== previousMessage) {
         addLog(task.message)
       }
-      
-      buildProgress.value = { progress: task.progress || 0, message: task.message }
-      
+
       if (task.status === 'completed') {
         addLog('Graph build task completed.')
+        const warnings = nextResult?.build_outcome?.warnings || []
+        warnings.forEach((warning) => addLog(`Build warning: ${warning}`))
         stopPolling()
         stopGraphPolling() // Stop polling, do final load
         currentPhase.value = 2
@@ -345,8 +443,9 @@ const pollTaskStatus = async (taskId) => {
         }
       } else if (task.status === 'failed') {
         stopPolling()
-        error.value = task.error
-        addLog(`Graph build task failed: ${task.error}`)
+        const failureReason = nextResult?.build_outcome?.reason || task.message || task.error || 'Graph build failed'
+        error.value = failureReason
+        addLog(`Graph build task failed: ${failureReason}`)
       }
     }
   } catch (e) {
@@ -394,6 +493,24 @@ const stopGraphPolling = () => {
   }
 }
 
+watch(() => route.query.mode, (nextMode) => {
+  const normalized = normalizeLayoutMode(nextMode)
+  if (viewMode.value !== normalized) {
+    viewMode.value = normalized
+  }
+})
+
+watch(() => route.query.view, (nextView) => {
+  const normalized = normalizeGraphPanelView(nextView)
+  if (graphPanelView.value !== normalized) {
+    graphPanelView.value = normalized
+  }
+})
+
+watch([viewMode, graphPanelView], () => {
+  syncRouteQuery()
+})
+
 onMounted(() => {
   initProject()
 })
@@ -434,10 +551,10 @@ onUnmounted(() => {
 }
 
 .brand {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Noto Sans SC', 'JetBrains Mono', monospace;
   font-weight: 800;
   font-size: 18px;
-  letter-spacing: 1px;
+  letter-spacing: 0.08em;
   cursor: pointer;
 }
 

@@ -1,0 +1,55 @@
+/*
+ * 旧档案 · Sepia Archive
+ *
+ * 复古研究室、卡片目录、旧书页边。
+ * 设计意图:阅读历史材料、知识沉淀、做品牌特色截图。
+ * 注意事项:青褐辅助色只能少量点缀,正文用深棕色保证可读性。
+ */
+
+html[data-theme="sepia-archive"] {
+  --bg-app:           #ebdcba;
+  --bg-app-gradient:  radial-gradient(circle at top right, rgba(138, 90, 68, 0.12), transparent 32%),
+                      linear-gradient(180deg, #ebdcba 0%, #f3e8cf 32%, #faf2de 100%);
+  --bg-canvas:        #fbf6ea;
+  --bg-surface:       #f6eedc;
+  --bg-surface-2:     #f1e5c9;
+  --bg-elevated:      #fbf6ea;
+  --bg-muted:         rgba(138, 90, 68, 0.10);
+  --bg-selected:      linear-gradient(180deg, #ecdaa9 0%, #f3e8cf 100%);
+
+  --text-primary:     #4b3a2a;
+  --text-secondary:   #7a6855;
+  --text-muted:       #a08a70;
+  --text-on-accent:   #fbf6ea;
+
+  --border-default:   #d6c39a;
+  --border-strong:    #c9b48a;
+  --border-muted:     #e3d4ac;
+
+  --accent-primary:        #8a5a44;
+  --accent-primary-hover:  #6e4330;
+  --accent-soft:           rgba(138, 90, 68, 0.14);
+  --accent-group-label:    #7a5538;
+  --focus-ring:            rgba(138, 90, 68, 0.40);
+
+  --state-warning:    #b07a2c;
+  --state-danger:     #a24030;
+
+  --input-bg:         #fbf6ea;
+  --input-border:     #d6c39a;
+  --input-border-focus: #8a5a44;
+
+  /* 档案阅读:纸面是奶油旧白,字深棕,强调用青褐 */
+  --reading-paper:        #fbf6ea;
+  --reading-ink:          #3b2e21;
+  --reading-quote-bar:    #5f7a6b;
+  --reading-code-bg:      #f1e5c9;
+  --reading-code-border:  #d6c39a;
+  --reading-highlight-bg: rgba(201, 180, 138, 0.45);
+  --reading-annotate:     #5f7a6b;
+  --reading-divider:      #d6c39a;
+  /* 档案主题下代码块用深棕黑(跟纸面的奶油色差形成"墨迹"感) */
+  --reading-code-panel-bg:     #2b1f14;
+  --reading-code-panel-ink:    #f3e8d2;
+  --reading-code-panel-border: #4b3a2a;
+}

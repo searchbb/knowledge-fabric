@@ -122,8 +122,18 @@
         <div class="card-content">
           <p class="api-note">POST /api/graph/build</p>
           <p class="description">
-            基于生成的本体，将文档自动分块后调用 Zep 构建知识图谱，提取实体和关系，并形成时序记忆与社区摘要
+            基于生成的本体，将文档自动分块后调用当前图谱 provider 构建知识图谱，并整理阅读骨架与阶段性诊断结果
           </p>
+
+          <div v-if="buildProgress" class="build-progress-inline">
+            <div class="build-progress-track">
+              <div class="build-progress-fill" :style="{ width: `${buildProgress.progress || 0}%` }"></div>
+            </div>
+            <div class="build-progress-meta">
+              <span class="build-progress-message">{{ buildProgress.message || '等待构建任务开始...' }}</span>
+              <span class="build-progress-percent">{{ buildProgress.progress || 0 }}%</span>
+            </div>
+          </div>
           
           <!-- Stats Cards -->
           <div class="stats-grid">
@@ -140,6 +150,60 @@
               <span class="stat-label">SCHEMA类型</span>
             </div>
           </div>
+
+          <div v-if="shouldShowPhase1Diagnostics" class="phase1-diagnostics">
+            <div class="diag-header">
+              <span class="diag-title">PHASE-1 DIAGNOSTICS</span>
+              <span v-if="phase1ContractVersion" class="diag-contract">{{ phase1ContractVersion }}</span>
+            </div>
+
+            <div class="diag-pill-row">
+              <span class="diag-pill">
+                Provider · {{ providerLabel }}
+              </span>
+              <span class="diag-pill" :class="statusToneClass(buildStatusMeta.tone)">
+                构建 · {{ buildStatusMeta.label }}
+              </span>
+              <span class="diag-pill" :class="statusToneClass(readingStatusMeta.tone)">
+                阅读骨架 · {{ readingStatusMeta.label }}
+              </span>
+            </div>
+
+            <div class="diag-metrics-grid">
+              <div class="diag-metric">
+                <span class="diag-metric-label">文本块完成</span>
+                <span class="diag-metric-value">{{ chunkProgressLabel }}</span>
+              </div>
+              <div class="diag-metric">
+                <span class="diag-metric-label">成功率</span>
+                <span class="diag-metric-value">{{ successRatioLabel }}</span>
+              </div>
+              <div class="diag-metric">
+                <span class="diag-metric-label">重试次数</span>
+                <span class="diag-metric-value">{{ retryCountLabel }}</span>
+              </div>
+              <div class="diag-metric">
+                <span class="diag-metric-label">限流命中</span>
+                <span class="diag-metric-value">{{ rateLimitLabel }}</span>
+              </div>
+            </div>
+
+            <div v-if="fallbackSummary" class="diag-callout warning">
+              {{ fallbackSummary }}
+            </div>
+            <div v-if="buildFailureReason" class="diag-callout error">
+              {{ buildFailureReason }}
+            </div>
+            <div v-if="readingStatusReason" class="diag-callout muted">
+              阅读骨架说明：{{ readingStatusReason }}
+            </div>
+
+            <div v-if="phase1Warnings.length" class="diag-warning-list">
+              <div class="diag-warning-item" v-for="warning in phase1Warnings" :key="warning">
+                {{ warning }}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -148,24 +212,38 @@
         <div class="card-header">
           <div class="step-info">
             <span class="step-num">03</span>
-            <span class="step-title">构建完成</span>
+            <span class="step-title">Phase-1 验收</span>
           </div>
           <div class="step-status">
-            <span v-if="currentPhase >= 2" class="badge accent">进行中</span>
+            <span v-if="currentPhase >= 2" class="badge accent">已就绪</span>
           </div>
         </div>
         
         <div class="card-content">
           <p class="api-note">POST /api/simulation/create</p>
-          <p class="description">图谱构建已完成，请进入下一步进行模拟环境搭建</p>
-          <button 
-            class="action-btn" 
-            :disabled="currentPhase < 2 || creatingSimulation"
-            @click="handleEnterEnvSetup"
-          >
-            <span v-if="creatingSimulation" class="spinner-sm"></span>
-            {{ creatingSimulation ? '创建中...' : '进入环境搭建 ➝' }}
-          </button>
+          <p class="description">
+            图谱与阅读骨架已生成。你可以先进入 Phase 2 工作台继续知识治理；如果要保留旧实验链，也可以进入旧环境搭建流程。
+          </p>
+          <div class="action-btn-row">
+            <button
+              class="action-btn workspace"
+              :disabled="currentPhase < 2"
+              @click="handleOpenWorkspace"
+            >
+              进入 Phase 2 工作台 ➝
+            </button>
+            <button 
+              class="action-btn secondary" 
+              :disabled="currentPhase < 2 || creatingSimulation"
+              @click="handleEnterEnvSetup"
+            >
+              <span v-if="creatingSimulation" class="spinner-sm"></span>
+              {{ creatingSimulation ? '创建中...' : '旧环境搭建流程（实验） ➝' }}
+            </button>
+          </div>
+          <p class="legacy-note">
+            兼容入口，仍依赖 legacy_zep 旧模拟链路，不属于 Phase 2 默认工作台主线。
+          </p>
         </div>
       </div>
     </div>
@@ -198,6 +276,7 @@ const props = defineProps({
   projectData: Object,
   ontologyProgress: Object,
   buildProgress: Object,
+  buildError: { type: String, default: '' },
   graphData: Object,
   systemLogs: { type: Array, default: () => [] }
 })
@@ -207,6 +286,20 @@ defineEmits(['next-step'])
 const selectedOntologyItem = ref(null)
 const logContent = ref(null)
 const creatingSimulation = ref(false)
+
+const handleOpenWorkspace = () => {
+  if (!props.projectData?.project_id) {
+    return
+  }
+
+  router.push({
+    name: 'Workspace',
+    params: {
+      projectId: props.projectData.project_id,
+      section: 'article',
+    },
+  })
+}
 
 // 进入环境搭建 - 创建 simulation 并跳转
 const handleEnterEnvSetup = async () => {
@@ -253,6 +346,113 @@ const graphStats = computed(() => {
   const types = props.projectData?.ontology?.entity_types?.length || 0
   return { nodes, edges, types }
 })
+
+const phase1Result = computed(() => props.buildProgress?.result || null)
+
+const phase1ContractVersion = computed(() => phase1Result.value?.contract_version || '')
+
+const phase1Diagnostics = computed(() => {
+  const diagnostics = phase1Result.value?.diagnostics
+  return diagnostics && typeof diagnostics === 'object' ? diagnostics : null
+})
+
+const phase1BuildOutcome = computed(() => {
+  const outcome = phase1Result.value?.build_outcome
+  return outcome && typeof outcome === 'object' ? outcome : null
+})
+
+const phase1ReadingStatus = computed(() => {
+  const status = phase1Result.value?.reading_structure_status
+  return status && typeof status === 'object' ? status : null
+})
+
+const providerLabel = computed(() => {
+  const provider = phase1Result.value?.provider || phase1Diagnostics.value?.provider
+  return provider ? String(provider).toUpperCase() : 'UNKNOWN'
+})
+
+const buildStatusMeta = computed(() => {
+  const status = phase1BuildOutcome.value?.status || props.buildProgress?.status || ''
+  switch (status) {
+    case 'completed':
+      return { label: '已完成', tone: 'success' }
+    case 'completed_with_warnings':
+      return { label: '完成但有告警', tone: 'warning' }
+    case 'completed_with_fallback':
+      return { label: 'Fallback 完成', tone: 'warning' }
+    case 'failed':
+      return { label: '失败', tone: 'error' }
+    case 'processing':
+    case 'pending':
+      return { label: '处理中', tone: 'processing' }
+    default:
+      return { label: '等待结果', tone: 'muted' }
+  }
+})
+
+const readingStatusMeta = computed(() => {
+  const status = phase1ReadingStatus.value?.status || 'not_started'
+  switch (status) {
+    case 'generated':
+      return { label: '已生成', tone: 'success' }
+    case 'fallback':
+      return { label: 'Fallback 生成', tone: 'warning' }
+    case 'failed':
+      return { label: '生成失败', tone: 'error' }
+    case 'skipped':
+      return { label: '已跳过', tone: 'muted' }
+    default:
+      return { label: '未开始', tone: 'muted' }
+  }
+})
+
+const shouldShowPhase1Diagnostics = computed(() => {
+  return Boolean(props.buildProgress || phase1Result.value || props.buildError)
+})
+
+const chunkProgressLabel = computed(() => {
+  const total = phase1Diagnostics.value?.chunk_count || 0
+  const processed = phase1Diagnostics.value?.processed_chunk_count || 0
+  return total ? `${processed}/${total}` : '—'
+})
+
+const successRatioLabel = computed(() => {
+  const ratio = phase1BuildOutcome.value?.success_ratio
+  if (typeof ratio !== 'number') return '—'
+  return `${Math.round(ratio * 100)}%`
+})
+
+const retryCountLabel = computed(() => `${phase1Diagnostics.value?.retry_count || 0}`)
+
+const rateLimitLabel = computed(() => `${phase1Diagnostics.value?.rate_limit_hit_count || 0}`)
+
+const fallbackSummary = computed(() => {
+  if (!phase1Diagnostics.value?.fallback_graph_applied) return ''
+  const mode = phase1Diagnostics.value?.fallback_graph_mode || 'heuristic_outline'
+  const nodes = phase1Diagnostics.value?.fallback_graph_node_count || 0
+  const edges = phase1Diagnostics.value?.fallback_graph_edge_count || 0
+  return `已启用 fallback graph (${mode})，产出 ${nodes} 个节点 / ${edges} 条关系。`
+})
+
+const buildFailureReason = computed(() => {
+  if (phase1BuildOutcome.value?.reason) return phase1BuildOutcome.value.reason
+  if (buildStatusMeta.value.tone === 'error' && props.buildError) return props.buildError
+  return ''
+})
+
+const readingStatusReason = computed(() => {
+  const reason = phase1ReadingStatus.value?.reason || ''
+  if (!reason) return ''
+  if (phase1ReadingStatus.value?.status === 'generated') return ''
+  return reason
+})
+
+const phase1Warnings = computed(() => {
+  const warnings = phase1BuildOutcome.value?.warnings
+  return Array.isArray(warnings) ? warnings : []
+})
+
+const statusToneClass = (tone) => `tone-${tone || 'muted'}`
 
 const formatDate = (dateStr) => {
   if (!dateStr) return '--:--:--'
@@ -360,6 +560,43 @@ watch(() => props.systemLogs.length, () => {
   color: #666;
   line-height: 1.5;
   margin-bottom: 16px;
+}
+
+.build-progress-inline {
+  margin-bottom: 16px;
+}
+
+.build-progress-track {
+  height: 8px;
+  background: #F1F1F1;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.build-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #FF5722 0%, #FF8A50 100%);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.build-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #555;
+}
+
+.build-progress-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.build-progress-percent {
+  font-family: 'JetBrains Mono', monospace;
+  color: #111;
 }
 
 /* Step 01 Tags */
@@ -598,7 +835,160 @@ watch(() => props.systemLogs.length, () => {
   display: block;
 }
 
+.phase1-diagnostics {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 8px;
+  background: #FCFCFC;
+  border: 1px solid #ECECEC;
+}
+
+.diag-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.diag-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #999;
+}
+
+.diag-contract {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #666;
+}
+
+.diag-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.diag-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #F3F3F3;
+  color: #333;
+  font-size: 11px;
+  border: 1px solid #E8E8E8;
+}
+
+.tone-success {
+  background: #E8F5E9;
+  border-color: #CBE8CD;
+  color: #23632B;
+}
+
+.tone-warning {
+  background: #FFF3E0;
+  border-color: #FFD7A6;
+  color: #8F4B00;
+}
+
+.tone-error {
+  background: #FDECEC;
+  border-color: #F4C7C7;
+  color: #A12626;
+}
+
+.tone-processing {
+  background: #FFF0EB;
+  border-color: #FFC7B8;
+  color: #C7491E;
+}
+
+.tone-muted {
+  background: #F3F3F3;
+  border-color: #E8E8E8;
+  color: #666;
+}
+
+.diag-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.diag-metric {
+  background: #FFF;
+  border: 1px solid #EFEFEF;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.diag-metric-label {
+  display: block;
+  font-size: 10px;
+  color: #999;
+  margin-bottom: 6px;
+}
+
+.diag-metric-value {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  color: #111;
+}
+
+.diag-callout {
+  margin-top: 12px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.diag-callout.warning {
+  background: #FFF7ED;
+  color: #8F4B00;
+  border: 1px solid #FFD7A6;
+}
+
+.diag-callout.error {
+  background: #FEF2F2;
+  color: #A12626;
+  border: 1px solid #F5C2C7;
+}
+
+.diag-callout.muted {
+  background: #F8F8F8;
+  color: #555;
+  border: 1px solid #ECECEC;
+}
+
+.diag-warning-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diag-warning-item {
+  font-size: 11px;
+  color: #555;
+  background: #FFF;
+  border: 1px dashed #E6E6E6;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
 /* Step 03 Button */
+.action-btn-row {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 12px;
+}
+
 .action-btn {
   width: 100%;
   background: #000;
@@ -616,9 +1006,45 @@ watch(() => props.systemLogs.length, () => {
   opacity: 0.8;
 }
 
+.action-btn.secondary {
+  background: #F7F0E4;
+  color: #6E4716;
+  border: 1px solid #E2C797;
+}
+
+.action-btn.secondary:disabled {
+  background: #F2EDE5;
+  color: #B7A892;
+  border-color: #E6DDD0;
+}
+
 .action-btn:disabled {
   background: #CCC;
   cursor: not-allowed;
+}
+
+.legacy-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #8B6C4A;
+}
+
+@media (max-width: 720px) {
+  .action-btn-row {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-grid,
+  .diag-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .build-progress-meta,
+  .diag-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 .progress-section {
