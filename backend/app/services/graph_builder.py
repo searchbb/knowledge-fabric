@@ -215,6 +215,9 @@ class MiniMaxLLMClient(OpenAIGenericClient):
                             reasoning spiral；
         - "deepseek"     : DeepSeek 在线 OpenAI 兼容 API，本身不是 thinking 模型，
                             不注入 /no_think；只设 temperature/max_tokens。
+        - "bailian"      : 阿里云百炼 DashScope OpenAI 兼容端点，qwen3.5-plus 等
+                            qwen3 系列默认 thinking=on；不注入 LM-Studio-specific
+                            的 /no_think 前缀，但通过 extra_body 关掉 thinking。
     """
 
     ROOT_FIELD_ALIASES = {
@@ -284,19 +287,11 @@ class MiniMaxLLMClient(OpenAIGenericClient):
         system_prepended = False
         use_qwen3_markers = self._provider == "qwen3_local"
         is_deepseek = self._provider == "deepseek"
-        # When the "deepseek" provider slot is actually pointed at Bailian
-        # (DashScope) running a qwen3.x model — e.g. for the 2026-04-15
-        # provider-swap experiment — we need extra_body.chat_template_kwargs
-        # to disable the model's default thinking mode, but we must NOT inject
-        # the /no_think system prefix (that's a LM Studio chat-template marker
-        # DashScope doesn't understand).
-        model_lower = (getattr(self, "model", "") or "").lower()
-        base_url_lower = (self._response_base_url or "").lower()
-        is_dashscope_qwen3 = (
-            is_deepseek
-            and "dashscope" in base_url_lower
-            and "qwen3" in model_lower
-        )
+        is_bailian = self._provider == "bailian"
+        # Bailian (DashScope) qwen3 models default thinking=on and need
+        # extra_body.chat_template_kwargs.enable_thinking=False for latency-
+        # predictable structured extraction. They do NOT understand the
+        # LM-Studio-specific /no_think system prefix, so we keep that off.
         for m in messages:
             m.content = self._clean_input(m.content)
             if m.role == 'user':
@@ -369,7 +364,7 @@ class MiniMaxLLMClient(OpenAIGenericClient):
                 else 4096
             )
             extra_body_kwargs = None
-            if is_dashscope_qwen3:
+            if is_bailian:
                 # DashScope qwen3 series defaults thinking ON; turn it off
                 # for structured extraction to keep latency predictable.
                 extra_body_kwargs = {

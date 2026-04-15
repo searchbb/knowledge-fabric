@@ -73,6 +73,22 @@ class Config:
     DEEPSEEK_SEMAPHORE_LIMIT = int(os.environ.get('DEEPSEEK_SEMAPHORE_LIMIT', '6'))
     DEEPSEEK_BATCH_SIZE = int(os.environ.get('DEEPSEEK_BATCH_SIZE', '1'))
 
+    # Bailian (Alibaba DashScope, OpenAI-compatible). qwen3.5-plus is the
+    # current recommended main model for Graphiti bulk extraction: the
+    # long-output tail is ~4-5x shorter than DeepSeek's on the same
+    # edge-extraction prompts (2026-04-15 A/B: 40+ min → 11 min for a 14KB
+    # Chinese article). Note: qwen3 models default to thinking=on on
+    # DashScope; graph_builder.py turns it off via extra_body when
+    # provider=='bailian', which matters for structured extraction latency.
+    BAILIAN_API_KEY = os.environ.get('BAILIAN_API_KEY')
+    BAILIAN_BASE_URL = os.environ.get(
+        'BAILIAN_BASE_URL',
+        'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    )
+    BAILIAN_MODEL_NAME = os.environ.get('BAILIAN_MODEL_NAME', 'qwen3.5-plus')
+    BAILIAN_SEMAPHORE_LIMIT = int(os.environ.get('BAILIAN_SEMAPHORE_LIMIT', '6'))
+    BAILIAN_BATCH_SIZE = int(os.environ.get('BAILIAN_BATCH_SIZE', '1'))
+
     # 文本处理配置
     DEFAULT_CHUNK_SIZE = int(os.environ.get('DEFAULT_CHUNK_SIZE', '3000'))
     DEFAULT_CHUNK_OVERLAP = int(os.environ.get('DEFAULT_CHUNK_OVERLAP', '200'))

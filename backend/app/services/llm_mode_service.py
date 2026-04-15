@@ -1,12 +1,20 @@
 """
-抽取模式开关服务 (local vs online DeepSeek)
+抽取模式开关服务 (local / online DeepSeek / bailian qwen3).
 
 设计要点 (GPT consult 2026-04-11):
 1. 状态持久化在 backend/data/llm_mode.json，跨进程重启保留
 2. 运行时可通过 GET/PUT /api/config/llm-mode 切换
 3. 不支持热拔插：如果 _client 已经缓存并且有任务在跑，切换会被拒绝 (409)
 4. get_graphiti_llm_params() 返回一个"快照 dict"，调用方拿到后立即用，不持有指针
-5. 零 fallback：无效 mode 直接报错；DEEPSEEK_API_KEY 缺失直接报错，不假装降级
+5. 零 fallback：无效 mode 直接报错；对应 provider 的 API_KEY 缺失直接报错，
+   不假装降级
+
+Modes:
+    'local'   - LM Studio / qwen3-30b-a3b-2507 本地运行 (needs /no_think)
+    'online'  - DeepSeek API (deepseek-chat)
+    'bailian' - 阿里云百炼 DashScope OpenAI-compatible API (qwen3.5-plus).
+                2026-04-15 A/B 显示 Bailian 在 Graphiti edge 大输出场景下
+                尾延迟比 DeepSeek 明显更低，推荐作为在线主模型。
 
 此服务只负责"参数快照"。真正的 LLM Client 构造、Graphiti 初始化、连接管理
 仍然在 graph_builder.py::_get_client() 中完成。
@@ -35,7 +43,7 @@ _MODE_FILE = os.path.join(
 _MODE_FILE = os.path.abspath(_MODE_FILE)
 
 # 合法的模式值。
-VALID_MODES = ('local', 'online')
+VALID_MODES = ('local', 'online', 'bailian')
 
 # 写入是全局串行的；读是无锁的（文件小、原子读取足够）。
 _write_lock = threading.Lock()
@@ -97,11 +105,15 @@ def set_llm_mode(new_mode: str, *, updated_by: str = 'api') -> Dict[str, Any]:
     if normalized not in VALID_MODES:
         raise ValueError(f'invalid mode {new_mode!r}; expected one of {VALID_MODES}')
 
-    # 在线模式下要求 DeepSeek Key 必须配置好，否则直接拒绝——
+    # 切模式之前要求对应 provider 的 API key 已配置好，否则直接拒绝——
     # 零 fallback：不允许切到一个"切完了跑不通"的模式。
     if normalized == 'online' and not Config.DEEPSEEK_API_KEY:
         raise ValueError(
             'DEEPSEEK_API_KEY 未配置；请先在 .env 写入 DEEPSEEK_API_KEY=sk-xxx 再切换到 online'
+        )
+    if normalized == 'bailian' and not Config.BAILIAN_API_KEY:
+        raise ValueError(
+            'BAILIAN_API_KEY 未配置；请先在 .env 写入 BAILIAN_API_KEY=sk-xxx 再切换到 bailian'
         )
 
     payload = {
@@ -132,8 +144,8 @@ def get_graphiti_llm_params() -> Dict[str, Any]:
     的持有，每次 _get_client 重新取，这样前后两次 build 可以吃到不同的模式。
 
     返回字段：
-        - mode: 'local' | 'online'
-        - provider: 'qwen3_local' | 'deepseek'
+        - mode: 'local' | 'online' | 'bailian'
+        - provider: 'qwen3_local' | 'deepseek' | 'bailian'
         - api_key: str
         - base_url: str
         - model: str
@@ -166,6 +178,28 @@ def get_graphiti_llm_params() -> Dict[str, Any]:
             #   Graphiti 已经在 system prompt 里写了 'Respond with JSON'，
             #   所以这里温度尽量低、但不要到 0（有极小概率触发 deepseek-chat
             #   的 determinism corner case）。
+            'temperature': 0.1,
+            'max_tokens': 4096,
+            'use_qwen3_no_think': False,
+        }
+
+    if mode == 'bailian':
+        if not Config.BAILIAN_API_KEY:
+            raise RuntimeError(
+                'LLM mode=bailian 但 BAILIAN_API_KEY 未配置；请先在 .env 写入 key '
+                '再切换，或改到其他 mode。'
+            )
+        return {
+            'mode': 'bailian',
+            'provider': 'bailian',
+            'api_key': Config.BAILIAN_API_KEY,
+            'base_url': Config.BAILIAN_BASE_URL,
+            'model': Config.BAILIAN_MODEL_NAME,
+            'semaphore_limit': Config.BAILIAN_SEMAPHORE_LIMIT,
+            'batch_size': Config.BAILIAN_BATCH_SIZE,
+            # qwen3.5-plus 默认 thinking 开，Graphiti 的结构化抽取用不上
+            # 推理过程；graph_builder 收到 provider='bailian' 后会通过
+            # extra_body.chat_template_kwargs.enable_thinking=False 关掉它。
             'temperature': 0.1,
             'max_tokens': 4096,
             'use_qwen3_no_think': False,
