@@ -37,6 +37,7 @@ from ..services.graph_access_service import (
 from ..services.text_processor import TextProcessor
 from ..utils.file_parser import FileParser
 from ..utils.logger import get_logger
+from ..utils.pipeline_profiler import PipelineProfiler, set_profiler, stage
 from ..models.task import TaskManager, TaskStatus
 from ..models.project import ProjectManager, ProjectStatus
 
@@ -452,6 +453,24 @@ def build_graph():
         # 启动后台任务
         def build_task():
             build_logger = get_logger('mirofish.build')
+
+            # === Wall-clock profiling (opt-in via PROFILE_BUILD_OUT env var). ===
+            # When unset, the stage() context manager below is a no-op; zero overhead.
+            _profile_path = os.environ.get("PROFILE_BUILD_OUT")
+            _profile = None
+            if _profile_path:
+                _profile = PipelineProfiler(
+                    run_id=task_id,
+                    extra={
+                        "project_id": project_id,
+                        "graph_name": graph_name,
+                        "provider": provider,
+                        "chunk_size": chunk_size,
+                        "chunk_overlap": chunk_overlap,
+                    },
+                )
+                set_profiler(_profile)
+
             try:
                 build_logger.info(f"[{task_id}] 开始构建图谱(provider={provider})...")
                 task_manager.update_task(
@@ -460,18 +479,20 @@ def build_graph():
                     message=f"初始化图谱构建服务 ({provider})..."
                 )
 
-                builder = get_graph_builder(provider)
+                with stage("init_builder"):
+                    builder = get_graph_builder(provider)
 
                 task_manager.update_task(
                     task_id,
                     message="文本分块中...",
                     progress=5
                 )
-                chunks = TextProcessor.split_text(
-                    text,
-                    chunk_size=chunk_size,
-                    overlap=chunk_overlap
-                )
+                with stage("chunk_split"):
+                    chunks = TextProcessor.split_text(
+                        text,
+                        chunk_size=chunk_size,
+                        overlap=chunk_overlap
+                    )
                 total_chunks = len(chunks)
 
                 task_manager.update_task(
@@ -479,7 +500,8 @@ def build_graph():
                     message="创建图谱...",
                     progress=10
                 )
-                graph_id = builder.create_graph(name=graph_name)
+                with stage("create_graph"):
+                    graph_id = builder.create_graph(name=graph_name)
 
                 project.graph_id = graph_id
                 ProjectManager.save_project(project)
@@ -489,18 +511,20 @@ def build_graph():
                     message="设置本体定义...",
                     progress=15
                 )
-                builder.set_ontology(graph_id, ontology)
+                with stage("set_ontology"):
+                    builder.set_ontology(graph_id, ontology)
 
                 task_manager.update_task(
                     task_id,
                     message="检查存储兼容性...",
                     progress=18
                 )
-                try:
-                    dropped_constraints = builder.ensure_phase1_storage_compatibility(graph_id)
-                except AttributeError:
-                    dropped_constraints = []
-                    build_logger.debug(f"[{task_id}] builder does not support ensure_phase1_storage_compatibility, skip")
+                with stage("ensure_storage_compat"):
+                    try:
+                        dropped_constraints = builder.ensure_phase1_storage_compatibility(graph_id)
+                    except AttributeError:
+                        dropped_constraints = []
+                        build_logger.debug(f"[{task_id}] builder does not support ensure_phase1_storage_compatibility, skip")
 
                 def add_progress_callback(msg, progress_ratio):
                     progress = 18 + int(progress_ratio * 37)  # 18% - 55%
@@ -533,13 +557,18 @@ def build_graph():
                 build_logger.info(
                     f"[{task_id}] 使用 batch_size={_active_batch_size} 走 add_text_batches..."
                 )
-                episode_uuids = builder.add_text_batches(
-                    graph_id,
-                    chunks,
+                with stage(
+                    "add_text_batches",
+                    n_chunks=total_chunks,
                     batch_size=_active_batch_size,
-                    progress_callback=add_progress_callback,
-                    cancel_check=cancel_check,
-                )
+                ):
+                    episode_uuids = builder.add_text_batches(
+                        graph_id,
+                        chunks,
+                        batch_size=_active_batch_size,
+                        progress_callback=add_progress_callback,
+                        cancel_check=cancel_check,
+                    )
 
                 task_manager.update_task(
                     task_id,
@@ -555,10 +584,11 @@ def build_graph():
                         progress=progress
                     )
 
-                builder._wait_for_episodes(
-                    episode_uuids,
-                    progress_callback=wait_progress_callback
-                )
+                with stage("wait_for_episodes", n_episodes=len(episode_uuids or [])):
+                    builder._wait_for_episodes(
+                        episode_uuids,
+                        progress_callback=wait_progress_callback
+                    )
 
                 diagnostics = _normalize_phase1_diagnostics(
                     getattr(builder, "get_build_diagnostics", lambda: {})(),
@@ -576,17 +606,19 @@ def build_graph():
                     message="清理图谱噪声...",
                     progress=92
                 )
-                try:
-                    builder._run_async(builder.prune_invalid_edges_async(graph_id))
-                except AttributeError:
-                    build_logger.debug(f"[{task_id}] builder does not support prune_invalid_edges_async, skip")
+                with stage("prune_invalid_edges"):
+                    try:
+                        builder._run_async(builder.prune_invalid_edges_async(graph_id))
+                    except AttributeError:
+                        build_logger.debug(f"[{task_id}] builder does not support prune_invalid_edges_async, skip")
 
                 task_manager.update_task(
                     task_id,
                     message="获取图谱数据...",
                     progress=95
                 )
-                graph_data = builder.get_graph_data(graph_id)
+                with stage("get_graph_data"):
+                    graph_data = builder.get_graph_data(graph_id)
                 diagnostics = _normalize_phase1_diagnostics(
                     getattr(builder, "get_build_diagnostics", lambda: {})(),
                     provider=provider,
@@ -602,32 +634,37 @@ def build_graph():
                     try:
                         from ..services.graph_quality_gate import GraphQualityGate
                         quality_gate = GraphQualityGate()
-                        assessment = quality_gate.assess(graph_data, ontology, text)
+                        with stage("quality_gate_assess"):
+                            assessment = quality_gate.assess(graph_data, ontology, text)
                         if assessment.should_supplement:
                             task_manager.update_task(
                                 task_id,
                                 message=f"质量检查: 补充抽取 {', '.join(assessment.missing_types)}...",
                                 progress=93,
                             )
-                            supplement = quality_gate.supplement(
-                                missing_types=assessment.missing_types,
-                                document_text=text,
-                                ontology=ontology,
-                                existing_nodes=graph_data.get("nodes", []),
-                            )
-                            if supplement.new_nodes:
-                                # 写入 Neo4j
-                                _write_supplement_to_neo4j(
-                                    builder, graph_id, supplement
+                            with stage(
+                                "quality_gate_supplement",
+                                missing_types=list(assessment.missing_types),
+                            ):
+                                supplement = quality_gate.supplement(
+                                    missing_types=assessment.missing_types,
+                                    document_text=text,
+                                    ontology=ontology,
+                                    existing_nodes=graph_data.get("nodes", []),
                                 )
-                                # 重新获取图谱数据
-                                graph_data = builder.get_graph_data(graph_id)
-                                node_count = graph_data.get("node_count", 0)
-                                edge_count = graph_data.get("edge_count", 0)
-                                build_logger.info(
-                                    f"[{task_id}] 补抽后: {node_count} 节点, {edge_count} 边 "
-                                    f"(补充了 {len(supplement.new_nodes)} 节点, {len(supplement.new_edges)} 边)"
-                                )
+                                if supplement.new_nodes:
+                                    # 写入 Neo4j
+                                    _write_supplement_to_neo4j(
+                                        builder, graph_id, supplement
+                                    )
+                                    # 重新获取图谱数据
+                                    graph_data = builder.get_graph_data(graph_id)
+                                    node_count = graph_data.get("node_count", 0)
+                                    edge_count = graph_data.get("edge_count", 0)
+                                    build_logger.info(
+                                        f"[{task_id}] 补抽后: {node_count} 节点, {edge_count} 边 "
+                                        f"(补充了 {len(supplement.new_nodes)} 节点, {len(supplement.new_edges)} 边)"
+                                    )
                     except Exception as gate_exc:
                         build_logger.warning(f"[{task_id}] 质量检查/补抽失败(不影响原图谱): {gate_exc}")
 
@@ -635,15 +672,17 @@ def build_graph():
                 if provider == "local" and node_count > 0:
                     try:
                         from ..services.graph_quality_gate import GraphQualityGate as _DedupGate
-                        dupes = _DedupGate.find_near_duplicates(graph_data, threshold=0.70)
+                        with stage("dedup_find_near_duplicates"):
+                            dupes = _DedupGate.find_near_duplicates(graph_data, threshold=0.70)
                         if dupes:
                             build_logger.info(
                                 f"[{task_id}] 发现 {len(dupes)} 对近似重复节点，开始合并"
                             )
-                            _merge_duplicate_nodes(builder, graph_id, dupes, build_logger=build_logger)
-                            graph_data = builder.get_graph_data(graph_id)
-                            node_count = graph_data.get("node_count", 0)
-                            edge_count = graph_data.get("edge_count", 0)
+                            with stage("dedup_merge_duplicates", n_pairs=len(dupes)):
+                                _merge_duplicate_nodes(builder, graph_id, dupes, build_logger=build_logger)
+                                graph_data = builder.get_graph_data(graph_id)
+                                node_count = graph_data.get("node_count", 0)
+                                edge_count = graph_data.get("edge_count", 0)
                     except Exception as dedup_exc:
                         build_logger.warning(f"[{task_id}] 节点去重失败(不影响原图谱): {dedup_exc}")
 
@@ -658,10 +697,11 @@ def build_graph():
                     try:
                         from ..services.graph_quality_gate import GraphQualityGate as _SummaryGate
                         _sg = _SummaryGate()
-                        backfilled = _sg.backfill_summaries(
-                            graph_data=graph_data,
-                            document_text=text,
-                        )
+                        with stage("summary_backfill"):
+                            backfilled = _sg.backfill_summaries(
+                                graph_data=graph_data,
+                                document_text=text,
+                            )
                         meta = dict(getattr(_sg, "last_summary_backfill_meta", {}) or {})
                         summary_backfill_meta["summary_backfill_requested"] = max(
                             int(meta.get("requested") or 0), 0
@@ -673,7 +713,8 @@ def build_graph():
                             meta.get("missing") or []
                         )
                         if backfilled:
-                            _write_summaries_to_neo4j(builder, graph_id, backfilled)
+                            with stage("summary_write_neo4j", n_nodes=len(backfilled)):
+                                _write_summaries_to_neo4j(builder, graph_id, backfilled)
                             graph_data = builder.get_graph_data(graph_id)
                             node_count = graph_data.get("node_count", 0)
                             edge_count = graph_data.get("edge_count", 0)
@@ -740,14 +781,15 @@ def build_graph():
                     )
                     try:
                         extractor = ReadingStructureExtractor()
-                        reading_structure = extractor.extract(
-                            project_name=project.name or graph_name,
-                            document_text=text,
-                            analysis_summary=project.analysis_summary or "",
-                            ontology=ontology,
-                            graph_data=graph_data,
-                            simulation_requirement=project.simulation_requirement or "",
-                        )
+                        with stage("reading_structure"):
+                            reading_structure = extractor.extract(
+                                project_name=project.name or graph_name,
+                                document_text=text,
+                                analysis_summary=project.analysis_summary or "",
+                                ontology=ontology,
+                                graph_data=graph_data,
+                                simulation_requirement=project.simulation_requirement or "",
+                            )
                         project.reading_structure = reading_structure
                         reading_structure_status = _normalize_phase1_reading_structure_status(
                             dict(getattr(extractor, "last_result_meta", {}) or {})
@@ -886,7 +928,23 @@ def build_graph():
                     error=traceback.format_exc(),
                     result=failure_result,
                 )
-        
+            finally:
+                # === Profile teardown (no-op when profiling was disabled). ===
+                if _profile is not None:
+                    try:
+                        from pathlib import Path as _PPath
+                        _profile.write_json(_PPath(_profile_path))
+                        _profile.print_summary()
+                        build_logger.info(
+                            f"[{task_id}] profile written → {_profile_path}"
+                        )
+                    except Exception as prof_exc:  # never fail the build for profiling
+                        build_logger.warning(
+                            f"[{task_id}] failed to write profile: {prof_exc}"
+                        )
+                    finally:
+                        set_profiler(None)
+
         # 启动后台线程
         thread = threading.Thread(target=build_task, daemon=True)
         thread.start()

@@ -219,7 +219,11 @@ class MiniMaxLLMClient(OpenAIGenericClient):
 
     ROOT_FIELD_ALIASES = {
         "extracted_entities": ("entities", "nodes", "items"),
-        "edges": ("relations", "relationships", "triples", "extracted_edges"),
+        # 注意 "facts": Bailian qwen3.5-plus 在 Graphiti 的 edge prompt 下
+        # (prompt 文案是 "extract fact triples"，且每条记录里有 "fact" 字段)
+        # 大概率会把顶层 key 写成 "facts" 而不是 "edges"。不加这个 alias
+        # 就会静默丢边。详见 docs/superpowers/plans 2026-04-15 root-cause notes.
+        "edges": ("relations", "relationships", "triples", "extracted_edges", "facts"),
         "summaries": ("entity_summaries", "summary_updates", "items"),
     }
 
@@ -279,6 +283,19 @@ class MiniMaxLLMClient(OpenAIGenericClient):
         system_prepended = False
         use_qwen3_markers = self._provider == "qwen3_local"
         is_deepseek = self._provider == "deepseek"
+        # When the "deepseek" provider slot is actually pointed at Bailian
+        # (DashScope) running a qwen3.x model — e.g. for the 2026-04-15
+        # provider-swap experiment — we need extra_body.chat_template_kwargs
+        # to disable the model's default thinking mode, but we must NOT inject
+        # the /no_think system prefix (that's a LM Studio chat-template marker
+        # DashScope doesn't understand).
+        model_lower = (getattr(self, "model", "") or "").lower()
+        base_url_lower = (self._response_base_url or "").lower()
+        is_dashscope_qwen3 = (
+            is_deepseek
+            and "dashscope" in base_url_lower
+            and "qwen3" in model_lower
+        )
         for m in messages:
             m.content = self._clean_input(m.content)
             if m.role == 'user':
@@ -351,6 +368,12 @@ class MiniMaxLLMClient(OpenAIGenericClient):
                 else 4096
             )
             extra_body_kwargs = None
+            if is_dashscope_qwen3:
+                # DashScope qwen3 series defaults thinking ON; turn it off
+                # for structured extraction to keep latency predictable.
+                extra_body_kwargs = {
+                    "chat_template_kwargs": {"enable_thinking": False},
+                }
 
         call_started = asyncio.get_event_loop().time()
         create_kwargs: Dict[str, Any] = {
@@ -398,6 +421,9 @@ class MiniMaxLLMClient(OpenAIGenericClient):
         entity_name_lookup = self._extract_entity_name_lookup(messages)
 
         # 按 response_model 递归规范化，而不是只做零散 alias 替换
+        # Capture pre-normalization parsed object for debug dump diffing.
+        _pre_normalize = parsed
+        validation_error = None
         if response_model is not None:
             parsed = self._normalize_for_model(
                 parsed,
@@ -410,12 +436,55 @@ class MiniMaxLLMClient(OpenAIGenericClient):
                 validated = response_model.model_validate(parsed)
                 parsed = validated.model_dump(exclude_none=True)
             except Exception as exc:
+                validation_error = f"{type(exc).__name__}: {exc}"[:600]
                 logger.warning(
                     "LLM response validation still failed for %s: %s; normalized=%s",
                     response_model.__name__,
                     exc,
                     self._preview_json(parsed),
                 )
+
+        # === Provider-compatibility diagnostic scaffold (OFF by default). ===
+        #
+        # Set DEBUG_LLM_DUMP=/path/to/file.jsonl to append one JSONL record
+        # per LLM call containing the raw model response plus the parsed
+        # dict before/after normalization. Purpose: diagnose cases where a
+        # new provider returns a JSON shape the normalizer doesn't handle
+        # (e.g. the 2026-04-15 incident where Bailian qwen3.5-plus wrote
+        # `{"facts": [...]}` instead of `{"edges": [...]}` and we silently
+        # produced 0 edges — see tests/test_graph_builder_edge_alias.py).
+        #
+        # Default off → zero overhead. Do NOT enable in production: this
+        # dump contains full prompt/response bodies and can grow large.
+        # User messages are truncated to 500 chars to keep per-call records
+        # small; raw_response_text is full so we can see the exact shape.
+        _dump_path = os.environ.get("DEBUG_LLM_DUMP")
+        if _dump_path:
+            try:
+                _dump_record = {
+                    "model": getattr(self, "model", None),
+                    "response_model": (
+                        response_model.__name__ if response_model is not None else None
+                    ),
+                    "system_messages": [
+                        (m.get("content") or "")[:1500]
+                        for m in openai_messages if m.get("role") == "system"
+                    ],
+                    "user_messages_preview": [
+                        (m.get("content") or "")[:500]
+                        for m in openai_messages if m.get("role") == "user"
+                    ],
+                    "raw_response_text": result,  # full raw model output
+                    "pre_normalize_parsed": _pre_normalize,
+                    "post_normalize_parsed": parsed,
+                    "validation_error": validation_error,
+                    "call_elapsed_ms": call_elapsed_ms,
+                }
+                with open(_dump_path, "a", encoding="utf-8") as _df:
+                    _df.write(json.dumps(_dump_record, ensure_ascii=False, default=str))
+                    _df.write("\n")
+            except Exception as _dump_exc:  # never break the build for debug
+                logger.debug("debug dump failed: %s", _dump_exc)
 
         logger.debug(
             "MiniMax normalized response for %s: %s",
