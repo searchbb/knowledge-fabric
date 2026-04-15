@@ -222,7 +222,8 @@ class MiniMaxLLMClient(OpenAIGenericClient):
         # 注意 "facts": Bailian qwen3.5-plus 在 Graphiti 的 edge prompt 下
         # (prompt 文案是 "extract fact triples"，且每条记录里有 "fact" 字段)
         # 大概率会把顶层 key 写成 "facts" 而不是 "edges"。不加这个 alias
-        # 就会静默丢边。详见 docs/superpowers/plans 2026-04-15 root-cause notes.
+        # 就会静默丢边——pydantic list[Edge] 接受空 list，不会报错，但
+        # 图谱会变成 0 边。回归锁: tests/test_graph_builder_edge_alias.py
         "edges": ("relations", "relationships", "triples", "extracted_edges", "facts"),
         "summaries": ("entity_summaries", "summary_updates", "items"),
     }
