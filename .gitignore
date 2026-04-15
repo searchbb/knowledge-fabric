@@ -76,5 +76,5 @@ docs/cleanup-notes/
 docs/superpowers/
 backend/app/archive/
 frontend/src/archive/
+# Graphiti smoke scripts are developer-local throwaways.
 backend/scripts/test_graphiti_*.py
-scripts/
