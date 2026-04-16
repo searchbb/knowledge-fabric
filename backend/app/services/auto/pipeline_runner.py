@@ -177,6 +177,13 @@ class AutoPipelineRunner:
             outcome = self._run_claimed(claimed)
             result.runs.append(outcome)
             executed += 1
+
+        # Post-drain: mark a pending governance request so the Theme Hub can
+        # surface it as a user-actionable banner. We do NOT run merge/promote
+        # inline — governance is an independent-entry operation per GPT design.
+        if executed > 0:
+            self._mark_theme_governance_scan_requested(reason="post_drain")
+
         return result
 
     # ------------------------------------------------------------------
@@ -830,6 +837,18 @@ class AutoPipelineRunner:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = resp.read()
         return _json.loads(data.decode("utf-8"))
+
+    @staticmethod
+    def _mark_theme_governance_scan_requested(*, reason: str = "post_drain") -> None:
+        """Write a pending governance request flag. Soft-fail — never break drain."""
+        try:
+            from .governance_request_store import mark_pending
+
+            mark_pending(reason=reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "failed to mark governance scan requested: %s (non-fatal)", exc
+            )
 
     # ------------------------------------------------------------------
     # Result helpers

@@ -1,6 +1,10 @@
 <template>
   <AppShell :crumbs="crumbs">
     <template #topbar-actions>
+      <button class="topbar-btn" :disabled="scanning" @click="handleGovernanceScan"
+        title="合并近似主题并晋升符合条件的候选主题">
+        <span class="icon">🔧</span><span class="label">{{ scanning ? '扫描中...' : '治理扫描' }}</span>
+      </button>
       <CopyLinkButton />
       <a class="topbar-btn" :href="$route.fullPath" target="_blank" rel="noopener" title="在新页面打开">
         <span class="icon">↗</span><span class="label">新页</span>
@@ -14,6 +18,15 @@
       全局知识域主题。每个主题是一个 hub 节点，连接来自不同文章的概念。
       用户可以创建/合并主题，auto-pipeline 会自动把概念归入已有主题。
     </p>
+
+    <!-- Pending governance request banner -->
+    <div v-if="pendingRequest" class="governance-banner">
+      有一次待执行的治理扫描（来源：{{ pendingRequest.requested_reason || 'unknown' }}，时间：{{ pendingRequest.requested_at || '?' }}）
+      <button class="banner-action-btn" :disabled="scanning" @click="handleGovernanceScan">立即执行</button>
+    </div>
+
+    <!-- Governance scan result banner -->
+    <div v-if="scanMsg" class="governance-banner" :class="{ 'governance-error': scanError }">{{ scanMsg }}</div>
 
     <!-- When the load failed we want the error to fully take over: the
          "主题列表" sidebar below otherwise renders "暂无主题。点击新建主题..."
@@ -188,6 +201,8 @@ import {
   createGlobalTheme,
   promoteCandidate,
   rejectCandidate,
+  runGovernanceScan,
+  getGovernanceRequest,
 } from '../../services/api/themeApi'
 import { appMode } from '../../runtime/appMode'
 
@@ -204,6 +219,12 @@ const loading = ref(false)
 const hubLoading = ref(false)
 const error = ref('')
 const showCreateModal = ref(false)
+
+// Governance scan state
+const scanning = ref(false)
+const scanMsg = ref('')
+const scanError = ref(false)
+const pendingRequest = ref(null)
 const createError = ref('')
 const newTheme = reactive({ name: '', description: '', keywords: '' })
 
@@ -284,10 +305,39 @@ async function doReject(entryId) {
 async function hydrateHub() {
   await loadThemes()
   await loadOrphansConcepts()
+  await checkPendingGovernanceRequest()
   // If a theme was selected before the flip, re-fetch its hub view so
   // the right-hand panel is also consistent with the new mode.
   if (selectedThemeId.value) {
     await selectTheme(selectedThemeId.value)
+  }
+}
+
+async function checkPendingGovernanceRequest() {
+  try {
+    const res = await getGovernanceRequest()
+    pendingRequest.value = res.data?.pending ? res.data.request : null
+  } catch { pendingRequest.value = null }
+}
+
+async function handleGovernanceScan() {
+  scanning.value = true
+  scanMsg.value = ''
+  scanError.value = false
+  try {
+    const res = await runGovernanceScan()
+    const d = res.data || {}
+    const merged = d.merge_scan?.merged?.length || 0
+    const promoted = d.promotion_scan?.promoted?.filter(p => p.action === 'promoted')?.length || 0
+    const review = d.merge_scan?.review_queue?.length || 0
+    scanMsg.value = `治理完成：合并 ${merged} 对主题，晋升 ${promoted} 个候选，新增 ${review} 个待审项`
+    pendingRequest.value = null // cleared by backend
+    await loadThemes()
+  } catch (e) {
+    scanError.value = true
+    scanMsg.value = '治理扫描失败：' + (e.message || '未知错误')
+  } finally {
+    scanning.value = false
   }
 }
 
@@ -307,6 +357,26 @@ watch(appMode, () => { hydrateHub() })
   transition: background 120ms ease, border-color 120ms ease;
 }
 .topbar-btn:hover { background: #f0f4ff; border-color: #a9bbd9; }
+.topbar-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.governance-banner {
+  padding: 10px 14px; border-radius: 10px;
+  border: 1px solid #a5d6a7; background: #e8f5e9;
+  color: #2e7d32; font-size: 13px;
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 12px;
+}
+.governance-banner.governance-error {
+  border-color: #ef9a9a; background: #ffebee; color: #c62828;
+}
+.banner-action-btn {
+  padding: 4px 12px; border-radius: 6px;
+  border: 1px solid #81c784; background: #fff;
+  color: #2e7d32; font-size: 12px; cursor: pointer;
+  white-space: nowrap;
+}
+.banner-action-btn:hover { background: #c8e6c9; }
+.banner-action-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .enter-panorama-btn {
   display: inline-block; margin-top: 6px;

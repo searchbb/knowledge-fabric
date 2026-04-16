@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const listGlobalThemesMock = vi.fn()
 const getThemeHubViewMock = vi.fn()
 const getOrphansMock = vi.fn()
+const runGovernanceScanMock = vi.fn()
+const getGovernanceRequestMock = vi.fn()
 
 vi.mock('../../services/api/themeApi', () => ({
   // Reads (what the live provider wraps):
@@ -22,6 +24,9 @@ vi.mock('../../services/api/themeApi', () => ({
   createGlobalTheme: vi.fn(),
   promoteCandidate: vi.fn(),
   rejectCandidate: vi.fn(),
+  // Governance (new):
+  runGovernanceScan: (...a) => runGovernanceScanMock(...a),
+  getGovernanceRequest: (...a) => getGovernanceRequestMock(...a),
 }))
 
 vi.mock('vue-router', () => ({
@@ -62,6 +67,11 @@ describe('ThemeViewPage (hub)', () => {
     listGlobalThemesMock.mockResolvedValue({ data: { themes: liveThemes } })
     getOrphansMock.mockResolvedValue({ data: { orphans: [] } })
     getThemeHubViewMock.mockResolvedValue({ data: { theme: {}, members: [], stats: {} } })
+    // Governance mocks — default to no pending request
+    getGovernanceRequestMock.mockResolvedValue({ data: { pending: false, request: null } })
+    runGovernanceScanMock.mockResolvedValue({
+      data: { merge_scan: { merged: [] }, promotion_scan: { promoted: [] } },
+    })
   })
 
   it('renders live themes on mount via dataClient → live provider → api mock', async () => {
@@ -104,5 +114,83 @@ describe('ThemeViewPage (hub)', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Live Theme One')
     expect(listGlobalThemesMock.mock.calls.length).toBe(liveCalls + 1)
+  })
+
+  // -----------------------------------------------------------------------
+  // Governance scan button (Tests I–L)
+  // -----------------------------------------------------------------------
+
+  it('(I) renders the governance scan button in the topbar', async () => {
+    const wrapper = mount(ThemeViewPage, {
+      global: { mocks: { $route: { fullPath: '/workspace/themes' } } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('治理扫描')
+  })
+
+  it('(J) button shows scanning label while scan is in flight', async () => {
+    // Never resolves during the test → stays in scanning state
+    runGovernanceScanMock.mockReturnValue(new Promise(() => {}))
+
+    const wrapper = mount(ThemeViewPage, {
+      global: { mocks: { $route: { fullPath: '/workspace/themes' } } },
+    })
+    await flushPromises()
+
+    // Find the governance scan button and click it
+    const btn = wrapper.findAll('button').find(b => b.text().includes('治理扫描'))
+    expect(btn).toBeDefined()
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('扫描中')
+  })
+
+  it('(K) shows result banner with merge/promote counts after scan', async () => {
+    // merged: array of merge-pair descriptors (length = # merges)
+    // promoted: items must have { action: 'promoted' } — component filters by this field
+    runGovernanceScanMock.mockResolvedValue({
+      data: {
+        merge_scan: { merged: ['pair_a'], review_queue: [] },
+        promotion_scan: { promoted: [{ action: 'promoted', theme_id: 't1' }] },
+      },
+    })
+
+    const wrapper = mount(ThemeViewPage, {
+      global: { mocks: { $route: { fullPath: '/workspace/themes' } } },
+    })
+    await flushPromises()
+
+    const btn = wrapper.findAll('button').find(b => b.text().includes('治理扫描'))
+    await btn.trigger('click')
+    await flushPromises()
+
+    const text = wrapper.text()
+    // scanMsg: "治理完成：合并 1 对主题，晋升 1 个候选，新增 0 个待审项"
+    expect(text).toContain('治理完成')
+    expect(text).toMatch(/合并\s*1/)
+    expect(text).toMatch(/晋升\s*1/)
+  })
+
+  it('(L) shows pending-request banner when backend reports a pending request', async () => {
+    getGovernanceRequestMock.mockResolvedValue({
+      data: {
+        pending: true,
+        request: {
+          requested: true,
+          status: 'pending',
+          requested_at: '2026-04-16T10:00:00',
+          requested_reason: 'post_drain',
+        },
+      },
+    })
+
+    const wrapper = mount(ThemeViewPage, {
+      global: { mocks: { $route: { fullPath: '/workspace/themes' } } },
+    })
+    await flushPromises()
+
+    // Component renders: "有一次待执行的治理扫描（来源：post_drain，时间：...）"
+    expect(wrapper.text()).toMatch(/待执行的治理扫描/)
   })
 })

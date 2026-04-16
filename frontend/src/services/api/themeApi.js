@@ -89,3 +89,16 @@ export function mergeThemes(sourceThemeId, targetThemeId) {
 export function getThemePanorama(themeId) {
   return service({ url: `/api/registry/themes/${themeId}/panorama`, method: 'get' })
 }
+
+// P1 governance
+export function runGovernanceScan({ dryRun = false, enableLlmAdjudication = true } = {}) {
+  return service({
+    url: '/api/registry/themes/governance-scan',
+    method: 'post',
+    data: { dry_run: dryRun, enable_llm_adjudication: enableLlmAdjudication },
+  })
+}
+
+export function getGovernanceRequest() {
+  return service({ url: '/api/registry/themes/governance-request', method: 'get' })
+}

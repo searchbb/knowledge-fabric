@@ -90,6 +90,23 @@ def list_global_themes():
     return jsonify({"success": True, "data": _model_dump(schema)})
 
 
+# Must be registered BEFORE the parameterized /themes/<theme_id> route
+# otherwise Flask treats "governance-request" as a theme_id.
+@registry_bp.route("/themes/governance-request", methods=["GET"])
+def get_governance_request():
+    """Check if there is a pending governance scan request (written by post-drain)."""
+    from ...services.auto.governance_request_store import get_pending
+
+    pending = get_pending()
+    return jsonify({
+        "success": True,
+        "data": {
+            "pending": pending is not None,
+            "request": pending,
+        },
+    })
+
+
 @registry_bp.route("/themes/<theme_id>", methods=["GET"])
 def get_global_theme(theme_id: str):
     try:
@@ -414,7 +431,11 @@ def run_theme_governance_scan():
 
     Do this post-pipeline (async / manual). GPT consult d10c98cab0b64a56
     recommends promote AFTER merge so merged themes don't get promoted.
+
+    If a pending governance request exists (written by post-drain), it is
+    cleared ONLY on success — never on failure (the flag stays for retry).
     """
+    from ...services.auto.governance_request_store import clear_pending, get_pending
     from ...services.auto.theme_merge_scanner import (
         promote_eligible_candidate_themes,
         scan_and_merge_candidates,
@@ -424,17 +445,30 @@ def run_theme_governance_scan():
     dry_run = bool(body.get("dry_run", False))
     enable_llm = bool(body.get("enable_llm_adjudication", True))
 
+    pending = get_pending()
+    had_pending = pending is not None
+
     try:
         merge_result = scan_and_merge_candidates(
             dry_run=dry_run,
             enable_llm_adjudication=enable_llm,
         )
         promote_result = promote_eligible_candidate_themes(dry_run=dry_run)
+
+        # Clear pending only on success — failed scans leave the flag for retry.
+        request_info: dict = {"had_pending_request": had_pending, "cleared": False}
+        if had_pending and not dry_run:
+            clear_pending(consumed_by="governance_scan_api")
+            request_info["cleared"] = True
+        if had_pending:
+            request_info["original_request"] = pending
+
         return jsonify({
             "success": True,
             "data": {
                 "merge_scan": merge_result,
                 "promotion_scan": promote_result,
+                "request": request_info,
             },
         })
     except Exception as exc:  # noqa: BLE001
