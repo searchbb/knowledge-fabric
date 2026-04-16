@@ -416,7 +416,11 @@ class ArticleWorkspacePipeline:
                     files={
                         "files": (temp_path.name, handle, "text/markdown"),
                     },
-                    timeout=300,
+                    # 2026-04-16: Bailian/qwen3.5-plus 偶发把 ontology generate
+                    # 推到 5min 以上（特别是和 graph build 并跑、Bailian
+                    # semaphore 被吃满时）。原 300s 太紧，bump 到 600s 给
+                    # provider 端的尾延迟留出余量；watchdog 仍在外层兜底。
+                    timeout=600,
                 )
 
         response.raise_for_status()

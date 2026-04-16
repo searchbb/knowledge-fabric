@@ -229,14 +229,25 @@ class AutoPipelineRunner:
             )
 
             self.store.heartbeat(run_id, phase="theme")
+            new_canonical_ids = self._collect_canonical_ids(
+                project_id=outcome.project_id or "",
+                accepted_decisions=decisions,
+            )
             theme_result = self._auto_propose_theme(
                 project_id=outcome.project_id or "",
                 project_name=pipeline_result.get("project_name", ""),
                 article_title=pipeline_result.get("title", ""),
-                new_canonical_ids=self._collect_canonical_ids(
-                    project_id=outcome.project_id or "",
-                    accepted_decisions=decisions,
-                ),
+                new_canonical_ids=new_canonical_ids,
+                run_id=run_id,
+            )
+
+            # Soft-failing enrich phase: bridge this article's new concepts to
+            # the rest of its theme. Failures are captured into discover_stats
+            # but never escape — the article still mark_processed below.
+            self.store.heartbeat(run_id, phase="discover")
+            discover_stats = self._auto_discover_relations(
+                theme_id=theme_result.theme_id,
+                new_entry_ids=new_canonical_ids,
                 run_id=run_id,
             )
 
@@ -246,6 +257,7 @@ class AutoPipelineRunner:
                 link_summary=link_summary,
                 theme_result=theme_result,
                 verification=verification,
+                discover_stats=discover_stats,
             )
             outcome.duration_ms = int((time.monotonic() - started) * 1000)
             outcome.phase = "done"
@@ -683,6 +695,87 @@ class AutoPipelineRunner:
             run_id=run_id,
         )
 
+    def _auto_discover_relations(
+        self,
+        *,
+        theme_id: Optional[str],
+        new_entry_ids: list[str],
+        run_id: str,
+    ) -> dict[str, Any]:
+        """Inline cross-concept relation discovery — soft-failing enrich phase.
+
+        Designed per GPT design review (consult ID f09fb61ce5e8a061, 2026-04-16):
+        - Increment-only scope: at least one endpoint in new_entry_ids
+        - Theme-scoped: skip when theme_proposer didn't classify into a theme
+        - Soft fail: any exception is captured into the returned dict's
+          'error' field; the caller still mark_processed the article. The
+          rationale is "discover is enrich, not gate" — failing the whole
+          article because LLM cross-relation judgment hiccupped would punish
+          the user for a non-essential phase. Errors are still surfaced
+          explicitly in summary.discover so this is partial-success-with-
+          warning, NOT a silent fallback.
+
+        Returns the structured stats dict that gets nested under
+        summary.discover. attempted=False means we didn't run because the
+        prerequisites weren't met (no theme / no new entries).
+        """
+        stats: dict[str, Any] = {
+            "attempted": False,
+            "theme_id": theme_id,
+            "new_entry_count": len(new_entry_ids),
+            "candidate_pairs": 0,
+            "created_relations": 0,
+            "deduped_pairs": 0,
+            "error": None,
+        }
+
+        if not theme_id:
+            stats["skipped_reason"] = "no theme assigned (theme_proposer returned noop)"
+            return stats
+        if not new_entry_ids:
+            stats["skipped_reason"] = "no new canonical entries this run"
+            return stats
+
+        from .cross_concept_discoverer import CrossConceptDiscoverer
+
+        discoverer = CrossConceptDiscoverer(
+            actor_id=self.actor_id,
+            source=self.source,
+        )
+        stats["attempted"] = True
+        try:
+            result = discoverer.discover(
+                theme_id=theme_id,
+                new_entry_ids=new_entry_ids,
+                run_id=run_id,
+            )
+            stats["candidate_pairs"] = result.get("candidates_count", 0)
+            stats["created_relations"] = result.get("discovered", 0)
+            stats["deduped_pairs"] = result.get("skipped", 0)
+            inner_errors = result.get("errors") or []
+            if inner_errors:
+                # Per-chunk LLM failures don't fail the phase, but should be
+                # visible. Join concise — full list lives in the discoverer log.
+                stats["error"] = "; ".join(str(e) for e in inner_errors[:3])
+                if len(inner_errors) > 3:
+                    stats["error"] += f" (+{len(inner_errors) - 3} more)"
+            if "reason" in result:
+                stats["reason"] = result["reason"]
+            # Pass through the diagnostic fields the discoverer added per GPT
+            # consult e297dd59ad8ab94b — these answer "why is candidate_pairs
+            # 0?" without forcing the user to grep logs.
+            for diag_key in ("scope", "theme_member_count", "theme_article_count", "eligible_entry_count"):
+                if diag_key in result:
+                    stats[diag_key] = result[diag_key]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "auto pipeline run %s: discover phase soft-failed: %s",
+                run_id,
+                exc,
+            )
+            stats["error"] = str(exc)
+        return stats
+
     # ------------------------------------------------------------------
     # Backend HTTP helpers (no Flask context required)
     # ------------------------------------------------------------------
@@ -774,8 +867,9 @@ class AutoPipelineRunner:
         link_summary: AutoLinkSummary,
         theme_result: AutoThemeResult,
         verification: BuildVerificationResult,
+        discover_stats: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        return {
+        summary: dict[str, Any] = {
             "node_count": verification.node_count,
             "edge_count": verification.edge_count,
             "candidate_count": verification.candidate_count,
@@ -786,6 +880,13 @@ class AutoPipelineRunner:
             "registry": link_summary.to_dict(),
             "theme": theme_result.to_dict(),
         }
+        # discover is the soft-failing enrich phase. Always emit the block (even
+        # when not attempted) so callers/audit don't have to special-case its
+        # absence — explicit "attempted=False, skipped_reason=..." is clearer
+        # than missing data.
+        if discover_stats is not None:
+            summary["discover"] = discover_stats
+        return summary
 
     def _emit_run_summary(
         self, *, run_id: str, url: str, outcome: RunOutcome
