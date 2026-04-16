@@ -4,82 +4,103 @@
 
 **A Knowledge Workspace for Research and Insight**
 
-<em>Turn articles, research notes, and Markdown into reusable knowledge assets.</em>
+<em>Turn articles and documents into a browsable knowledge graph and workspace.</em>
 
 [English](./README-EN.md) | [中文文档](./README.md)
 
 </div>
 
-## ⚡ Overview
+## Overview
 
-**Knowledge Fabric** is currently being open-sourced primarily as an **article -> graph -> knowledge workspace** system rather than as a simulation-first product.
+Knowledge Fabric imports articles or Markdown documents, builds a knowledge graph for each project, and lets you browse that knowledge in a workspace.
 
-The core idea is to turn long-form articles, notes, and Markdown files into reusable knowledge assets instead of one-off summaries.
+You can:
 
-Current goals:
+- Import articles or Markdown files
+- Generate a knowledge graph and reading structure per project
+- Browse project-level concepts, themes, and cross-article relations in a workspace
+- Explore the global concept registry and theme hub
 
-- turn a single article into a readable project graph
-- gradually promote project-level concepts, themes, and relations into cross-project knowledge assets
-- provide a stable workspace for review, governance, evolution tracking, and automation
+## Architecture & pipeline
 
-Recommended usage today:
+### Four-layer knowledge model
 
-- input an article URL or a Markdown file
-- build a project and graph
-- inspect the Phase 2 workspace for article graph, concept/theme candidates, cross-article relations, and auto-pipeline status
+```mermaid
+flowchart LR
+    A[L1 Article layer<br/>raw text / summary / article graph]
+    B[L2 Concept layer<br/>Canonical Concept alignment]
+    C[L3 Theme layer<br/>Theme assignment / Merge / Promote]
+    D[L4 Relation layer<br/>cross-article Bridge / Contrast / Foundation]
 
-## ✨ Core Capabilities
+    A --> B --> C --> D
+```
 
-- **Article ingestion**: import Markdown directly or enqueue URLs
-- **Graph building**: create project graphs, reading structure, and workspace state
-- **Project workspace**: inspect article graph, project concepts, theme signals, evolution, and review
-- **Cross-project knowledge layer**: browse the registry, theme hub, and cross-article relations
-- **Auto pipeline queue**: manually drive URL fetching, graph building, and follow-up knowledge processing
+### Main processing pipeline
 
-## 🚧 Current Open-Source Status (Phase 2 Preview)
+```mermaid
+flowchart TD
+    A[User adds article<br/>URL / Markdown] --> B[Fetch / Preprocess<br/>fetch, convert to Markdown, clean]
+    B --> C[Phase 1 Build<br/>extract concepts / relations / summary]
+    C --> D[Verify<br/>validate output usability]
+    D --> E[Concept<br/>auto-accept some concept candidates]
+    E --> F[Registry<br/>write to global Concept Registry<br/>and link to current article]
+    F --> G[Theme Assignment<br/>classify into themes<br/>active + candidate both visible]
 
-This repository currently contains two product surfaces:
+    G --> H[Discover<br/>cross-article relation discovery<br/>within the matched primary Theme only]
+    H --> I[Summarize / Audit<br/>aggregate phase results and audit fields]
+    I --> J[RunOutcome returned to frontend]
 
-- **Phase 2 Knowledge Workspace**: the recommended open-source entry point today. It focuses on article ingestion, graph building, the new workspace, concept/theme candidates, cross-article relations, and the auto pipeline queue.
-- **Legacy prediction/simulation flow**: the older simulation / report / interaction routes are still present for compatibility and comparison, but they are not the primary path for this preview release.
+    G -. produces theme data .-> K[Theme Store]
 
-What is already usable:
+    K --> L[M3 Merge Scanner<br/>near-neighbor theme merge scan]
+    K --> M[M2 Promote Scanner<br/>candidate → active auto-promotion]
 
-- Import an article or Markdown and generate a project + graph
-- Open the Phase 2 workspace and inspect article graph / reading output
-- Use the auto pipeline queue as a manual entry point for URL ingestion
-- Explore the global registry, theme hub, and cross-article relation views
+    L --> N{Merge decision}
+    N -->|high score + guardrails| O[Auto Merge]
+    N -->|mid score / same-domain hint| P[LLM ruling<br/>MERGE / KEEP_SEPARATE / UNCERTAIN]
+    N -->|low score| Q[No change]
 
-What is still preview / prototype:
+    M --> R{Promotion rules}
+    R -->|Rule A<br/>articles ≥ 2 and members ≥ 6| S[Promote to active]
+    R -->|Rule B<br/>articles ≥ 3 and members ≥ 4| S
+    R -->|otherwise| T[Stay candidate]
 
-- `review` is still a prototype flow, not a full review/approval loop
-- `evolution` is currently a per-project snapshot, not a full historical timeline
-- project-level `concept/theme` views are still mostly candidate/read-only aggregations, not a finished governance system
+    O --> K
+    P --> K
+    Q --> K
+    S --> K
+    T --> K
+```
 
-## 🔄 Recommended Preview Flow (Phase 2)
+### Why not run cross-theme discovery for all theme pairs?
 
-1. **Import content**: upload Markdown or add a URL into the auto pipeline queue
-2. **Build the graph**: create a project, graph, reading structure, and Phase 2 workspace entry
-3. **Use the project workspace**: switch between article graph, project concepts, theme signals, evolution, and review
-4. **Move into cross-project governance**: inspect the registry, theme hub, cross-article relations, and auto pipeline
-5. **Iterate on governance**: review and refine candidate concepts, themes, and relations
+```mermaid
+flowchart TD
+    A[Why not do all-pairs Theme Discover now?] --> B[Cost becomes O&#40;N²&#41;]
+    B --> C[As themes grow<br/>token usage and latency explode]
+    C --> D[Current strategy:<br/>incremental Discover within same Theme only]
+    D --> E[M2 / M3 governance consolidates knowledge<br/>into a small set of stable themes]
+    E --> F[When truly needed, add P3:<br/>scan Top-K neighbor themes only, not all pairs]
+```
 
-> Note: the older prediction / simulation / reporting surfaces are still included in the repo, but the recommended open-source preview path starts from the Phase 2 workspace.
+The system uses **same-theme incremental discovery**: each pipeline run performs cross-article relation discovery only within the primary theme hit during that run. This avoids O(N²) full-pair scanning. Theme governance (M2 promote + M3 merge) continuously consolidates knowledge into fewer, stable themes — laying the groundwork for a future Top-K neighbor scan if broader coverage is needed.
 
-## 🚀 Quick Start
+## Current release
 
-### Option 1: Source Code Deployment (Recommended)
+This repository is a **Preview** of Knowledge Fabric. Article ingestion, graph building, the project workspace, and global concept / theme browsing are usable today; some review and evolution views are still prototypes.
 
-#### Prerequisites
+## Quick start
 
-| Tool | Version | Install / Check |
+### Prerequisites
+
+| Tool | Version | Check / install |
 |------|---------|-----------------|
-| **Node.js** | 18+ | `node -v` / [download](https://nodejs.org/) |
-| **Python** | ≥3.11, ≤3.12 | `python3 --version` |
-| **uv** | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` / `uv --version` |
-| **Neo4j** | 5.26+ | Docker one-liner below, or [Neo4j Desktop](https://neo4j.com/download/) |
+| Node.js | 18+ | `node -v` / <https://nodejs.org/> |
+| Python | 3.11 – 3.12 | `python3 --version` |
+| uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| Neo4j | 5.26+ | Docker one-liner below, or [Neo4j Desktop](https://neo4j.com/download/) |
 
-**Run a local Neo4j via Docker (easiest):**
+Run a local Neo4j via Docker (easiest):
 
 ```bash
 docker run -d \
@@ -90,148 +111,116 @@ docker run -d \
   neo4j:5.26
 ```
 
-- Visit `http://localhost:7474/` once to confirm the password
-- Keep `.env` aligned: `NEO4J_URI=bolt://localhost:7687 / NEO4J_USER=neo4j / NEO4J_PASSWORD=graphiti123`
-
-#### 1. Configure Environment Variables
+### 1. Clone and configure environment variables
 
 ```bash
+git clone https://github.com/searchbb/knowledge-fabric.git
+cd knowledge-fabric
 cp .env.example .env
-# Edit .env, at minimum set LLM_API_KEY
 ```
 
-**Minimum viable `.env`:**
+Edit `.env` — a minimum viable configuration:
 
 ```env
-# Core LLM (OpenAI-compatible — any compatible gateway works)
+# LLM (OpenAI-compatible; any compatible gateway works)
 LLM_API_KEY=sk-xxxxxxxx
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL_NAME=gpt-4o-mini
 
-# Neo4j / Graphiti
+# Neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=graphiti123
 ```
 
-`ZEP_API_KEY`, `DEEPSEEK_API_KEY`, `OBSIDIAN_VAULT_PATH`, and `OPENCLAW_FETCH_SCRIPT_PATH` are optional. See [`.env.example`](./.env.example) for the full template.
+See [`.env.example`](./.env.example) for the full template.
 
-#### 2. Install Dependencies
+### 2. Install dependencies
 
 ```bash
-# One-click install for root + frontend + backend
 npm run setup:all
 ```
 
-Or install step by step:
-
-```bash
-npm run setup          # Node deps (root + frontend)
-npm run setup:backend  # Python deps (uv sync, creates .venv)
-```
-
-> If you plan to use the reading-view screenshot feature (the `article_workspace_pipeline` calls `playwright` to render the reading view to PNG), also run:
+> If you plan to use the reading-view screenshot feature, also run:
 >
 > ```bash
 > cd backend && uv run playwright install chromium
 > ```
 
-#### 3. Start the Services
+### 3. Start
 
 ```bash
-# Start both frontend and backend (from the project root)
 npm run dev
 ```
 
-**Service URLs:**
-- Frontend: `http://localhost:3000`
-- Backend API: `http://localhost:5001`
+- Frontend: <http://localhost:3000>
+- Backend API: <http://localhost:5001>
 
-**Recommended entry points:**
-- Phase 2 workspace overview: `http://localhost:3000/workspace/overview`
-- Legacy home / compatibility entry: `http://localhost:3000/`
+## Verify your first run
 
-**Run individually:**
+1. Open <http://localhost:3000/workspace/overview>. If the overview page loads, the frontend and the `/api/*` proxy are wired.
+2. If the page reports Neo4j is not connected, check that the container in `docker ps` is running and that the password in `.env` matches the container.
+3. From the import entry or the auto pipeline queue, paste a URL or upload a Markdown file and wait for the graph to build.
+4. Once a project is created, open it to view the article graph, concepts, theme candidates, and cross-article relations inside the workspace.
 
-```bash
-npm run backend   # backend only
-npm run frontend  # frontend only
-```
+## Main entry points
 
-#### 4. First-Run Verification Path
+| Page | Path |
+|------|------|
+| Workspace overview | `/workspace/overview` |
+| Concept registry | `/workspace/registry` |
+| Theme hub | `/workspace/themes` |
+| Project workspace | `/workspace/:projectId` |
 
-1. Open `http://localhost:3000/workspace/overview` — if the page loads, the frontend + the `/api/*` proxy are wired.
-2. If you see a "Neo4j not connected" warning, check `docker ps` for the Neo4j container and confirm the password in `.env`.
-3. Try the "auto pipeline queue" or "article import" page: paste a WeChat / blog URL, or upload a Markdown file, and watch the graph build.
-4. LLM returning 401 / 404? Double-check `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL_NAME` against your gateway's docs.
-
-### Option 2: Docker Deployment
+## Docker deployment
 
 ```bash
-# 1. Configure environment variables (same as source deployment)
 cp .env.example .env
-
-# 2. Local build + launch
 docker compose up -d --build
 ```
 
-Reads `.env` from the root directory by default and maps ports `3000 (frontend) / 5001 (backend)`.
+Reads `.env` from the project root and maps ports `3000` (frontend) / `5001` (backend).
 
-The current `docker-compose.yml` only launches the app container — **you still need to provide a reachable Neo4j instance**. Use the `docker run` command above, then set `NEO4J_URI` to `host.docker.internal:7687` (macOS / Windows) or the host IP (Linux).
+The current `docker-compose.yml` only launches the app container — you still need a reachable Neo4j. Point `NEO4J_URI` at your instance (macOS / Windows can use `host.docker.internal:7687`).
 
-> Once a GHCR image is published by CI, you can swap the `build:` in `docker-compose.yml` for `image: ghcr.io/searchbb/knowledge-fabric:latest` to skip the local build.
+## Running tests
 
-## 🧪 Running Tests
-
-The backend ships a pytest suite. Default run:
+Start with the subset that doesn't require external services:
 
 ```bash
 cd backend
+uv run pytest -q \
+  --ignore=tests/test_graph_builder_normalization.py \
+  --ignore=tests/test_theme_attach_detach_audit.py \
+  --ignore=tests/test_e2e_registry_flows.py \
+  --ignore=tests/test_evolution_log_api.py
+```
+
+Full suite (needs a live Neo4j and live LLM):
+
+```bash
 uv run pytest -q
 ```
 
-Some tests require a real Neo4j + live LLM (mostly in `test_graph_builder_normalization.py`, `test_theme_attach_detach_audit.py`, `test_e2e_registry_flows.py`, and parts of `test_evolution_log_api.py`). To run only the **pure unit tests**:
-
-```bash
-uv run pytest -q --ignore=tests/test_graph_builder_normalization.py \
-                 --ignore=tests/test_theme_attach_detach_audit.py \
-                 --ignore=tests/test_e2e_registry_flows.py \
-                 --ignore=tests/test_evolution_log_api.py
-```
-
-## 🛠 Common Issues
+## Common issues
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `npm run dev` fails: `port 3000 is already in use` | Port 3000 taken (another dev server / Docker) | Change `server.port` in `frontend/vite.config.js` and set `KNOWLEDGE_WORKSPACE_FRONTEND=http://localhost:<new>` in `.env` |
-| Backend `ModuleNotFoundError: graphiti_core` | Python deps missing | Make sure `uv sync` ran; start the backend with `uv run python run.py` (or activate `backend/.venv`) — do not use the system `python3` |
-| Backend Neo4j `ServiceUnavailable` | Neo4j not running or password mismatch | `docker ps \| grep neo4j`; if needed `docker logs knowledge-fabric-neo4j` |
-| Reading-view screenshot `ERR_CONNECTION_REFUSED` | Frontend not on 3000, or playwright browser not installed | Make sure `npm run frontend` is up; run `cd backend && uv run playwright install chromium` |
-| LLM 401 / 404 | `LLM_BASE_URL` / `LLM_MODEL_NAME` mismatched with your key | Reconcile with your gateway's docs; OpenAI official is `https://api.openai.com/v1` + `gpt-4o-mini` |
+| `npm run dev` fails with `port 3000 is already in use` | Port 3000 taken | Change `server.port` in `frontend/vite.config.js` and set `KNOWLEDGE_WORKSPACE_FRONTEND=http://localhost:<new>` in `.env` |
+| Backend `ModuleNotFoundError: graphiti_core` | Python deps not installed | Make sure `uv sync` ran; start the backend with `uv run python run.py` (or activate `backend/.venv`) — not the system `python3` |
+| Backend `ServiceUnavailable` from Neo4j | Neo4j not running or password mismatch | `docker ps \| grep neo4j`; if needed `docker logs knowledge-fabric-neo4j` |
+| Reading-view screenshot `ERR_CONNECTION_REFUSED` | Frontend not on port 3000, or playwright browser missing | Make sure `npm run frontend` is up; run `cd backend && uv run playwright install chromium` |
+| LLM 401 / 404 | `LLM_BASE_URL` / `LLM_MODEL_NAME` mismatched with key | Reconcile with your gateway's docs; OpenAI official is `https://api.openai.com/v1` + `gpt-4o-mini` |
 
-## 🔁 Enabling Legacy Simulation (optional)
+## Known limitations
 
-`camel-oasis` / `camel-ai` pin a Neo4j version that conflicts with the main pipeline, so they are **not** in the main dependencies.
+- Review and evolution views are still prototypes
+- Some backend tests depend on a live Neo4j and a live LLM
 
-Only if you need the legacy simulation / report capability (and set `ENABLE_LEGACY_ZEP_SIMULATION=true` in `.env`), install them in a **separate virtual environment**:
+## Feedback
 
-```bash
-python -m venv .venv-legacy
-source .venv-legacy/bin/activate
-pip install -r backend/requirements-legacy.txt
-```
+Feedback via GitHub Issues / PRs is welcome.
 
-## ⚠️ Known Limitations
+## License
 
-- `review` is still a prototype and should not be treated as a finished governance workflow
-- `evolution` currently shows project-level readiness snapshots rather than a full historical timeline
-- the home / history entry still carries legacy flow assumptions; Phase 2 has not fully replaced every primary entry yet
-- some backend tests expect a live Neo4j + live LLM; under a plain `uv run pytest` a dozen or so tests in `test_graph_builder_normalization.py` / `test_theme_attach_detach_audit.py` are expected to fail — this is the "requires external environment" contract
-
-## 📬 Community & Feedback
-
-- Feedback via GitHub Issues / PRs is welcome
-
-## 📄 Acknowledgments
-
-Knowledge Fabric carries forward some legacy simulation capabilities powered by **[OASIS](https://github.com/camel-ai/oasis)**. The current Phase 2 workspace continues to evolve around local graph building (Graphiti + Neo4j), knowledge governance, and workspace UX.
+AGPL-3.0. See [LICENSE](./LICENSE).
