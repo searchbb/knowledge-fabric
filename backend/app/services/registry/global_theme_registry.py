@@ -363,6 +363,43 @@ def detach_concepts(
     return theme
 
 
+def set_theme_status(theme_id: str, new_status: str) -> dict[str, Any]:
+    """Flip a theme's lifecycle status (candidate / active / merged / archived).
+
+    Used by M2 (candidate→active auto-promotion, GPT consult d10c98cab0b64a56)
+    and future human overrides. Emits an evolution event with the transition
+    so audit callers can reconstruct the theme lifecycle.
+    """
+    valid = {"candidate", "active", "merged", "archived", "rejected_duplicate"}
+    if new_status not in valid:
+        raise ValueError(f"invalid theme status {new_status!r}; valid={sorted(valid)}")
+
+    store = _load_themes()
+    theme = store["themes"].get(theme_id)
+    if not theme:
+        raise GlobalThemeNotFoundError(theme_id)
+
+    old_status = theme.get("status", "active")
+    if old_status == new_status:
+        theme["concept_entry_ids"] = _compat_entry_ids(theme)
+        return theme
+    theme["status"] = new_status
+    theme["updated_at"] = datetime.now().isoformat()
+    _save_themes(store)
+    _neo4j_sync_theme(theme)
+
+    from .evolution_log import emit_event
+    emit_event(
+        event_type="theme_status_changed",
+        entity_type="global_theme",
+        entity_id=theme_id,
+        entity_name=theme.get("name", ""),
+        details={"from": old_status, "to": new_status},
+    )
+    theme["concept_entry_ids"] = _compat_entry_ids(theme)
+    return theme
+
+
 def promote_candidate(theme_id: str, entry_ids: list[str]) -> dict[str, Any]:
     """Promote candidate memberships to member role."""
     store = _load_themes()

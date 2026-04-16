@@ -357,6 +357,90 @@ def merge_global_themes():
         return jsonify({"success": False, "error": str(exc)}), 404
 
 
+@registry_bp.route("/themes/merge-scan", methods=["POST"])
+def run_theme_merge_scan():
+    """Run the near-duplicate theme merge scanner (P1 M3).
+
+    Body (all optional):
+        dry_run: bool (default false) — score + decide but don't actually merge
+        enable_llm_adjudication: bool (default true)
+        max_llm_calls: int (default 20) — safety cap
+
+    Returns the full audit dict from scan_and_merge_candidates.
+    """
+    from ...services.auto.theme_merge_scanner import scan_and_merge_candidates
+
+    body = request.get_json(silent=True) or {}
+    dry_run = bool(body.get("dry_run", False))
+    enable_llm = bool(body.get("enable_llm_adjudication", True))
+    max_llm = int(body.get("max_llm_calls", 20))
+
+    try:
+        result = scan_and_merge_candidates(
+            dry_run=dry_run,
+            enable_llm_adjudication=enable_llm,
+            max_llm_calls=max_llm,
+        )
+        return jsonify({"success": True, "data": result})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@registry_bp.route("/themes/promote-candidates", methods=["POST"])
+def run_theme_promotion_scan():
+    """Promote candidate themes that pass the M2 rules to active (P1 M2).
+
+    Body:
+        dry_run: bool (default false)
+
+    Rules (GPT consult d10c98cab0b64a56 A3):
+        Rule A: distinct_articles >= 2 AND member_count >= 6
+        Rule B: distinct_articles >= 3 AND member_count >= 4
+    """
+    from ...services.auto.theme_merge_scanner import promote_eligible_candidate_themes
+
+    body = request.get_json(silent=True) or {}
+    dry_run = bool(body.get("dry_run", False))
+    try:
+        result = promote_eligible_candidate_themes(dry_run=dry_run)
+        return jsonify({"success": True, "data": result})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@registry_bp.route("/themes/governance-scan", methods=["POST"])
+def run_theme_governance_scan():
+    """Run the full P1 governance pass: merge-scan then promote-candidates.
+
+    Do this post-pipeline (async / manual). GPT consult d10c98cab0b64a56
+    recommends promote AFTER merge so merged themes don't get promoted.
+    """
+    from ...services.auto.theme_merge_scanner import (
+        promote_eligible_candidate_themes,
+        scan_and_merge_candidates,
+    )
+
+    body = request.get_json(silent=True) or {}
+    dry_run = bool(body.get("dry_run", False))
+    enable_llm = bool(body.get("enable_llm_adjudication", True))
+
+    try:
+        merge_result = scan_and_merge_candidates(
+            dry_run=dry_run,
+            enable_llm_adjudication=enable_llm,
+        )
+        promote_result = promote_eligible_candidate_themes(dry_run=dry_run)
+        return jsonify({
+            "success": True,
+            "data": {
+                "merge_scan": merge_result,
+                "promotion_scan": promote_result,
+            },
+        })
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 # ---------------------------------------------------------------------------
 # Panorama (Phase B: theme detail with cross-article relations)
 # ---------------------------------------------------------------------------
