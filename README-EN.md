@@ -21,6 +21,19 @@ You can:
 - Browse project-level concepts, themes, and cross-article relations in a workspace
 - Explore the global concept registry and theme hub
 
+### System overview
+
+![Knowledge Fabric System Overview](./docs/images/knowledge-fabric-overview.png)
+
+The architecture unfolds across four core stages: extracting structure from text, organizing that structure into a reading skeleton, linking skeletons across articles, and growing a persistent knowledge network.
+
+- **Unstructured text** — articles, notes, and reports enter the system as raw material, preserving original context and detail.
+- **Semantic graph** — concepts and relationships are extracted from the text, turning scattered expressions into an actionable semantic structure.
+- **Reading skeleton** — the article's core thread is surfaced, highlighting key nodes such as problems, solutions, and architecture, making content easier to navigate.
+- **Knowledge network** — concepts, arguments, methods, and evidence across articles are linked together, accumulating into a traceable, extensible long-term knowledge asset.
+
+> Knowledge Fabric is not about how much you store — it's about whether content can be woven into structure, structure distilled into a network, and that network turned into understanding.
+
 ## Architecture & pipeline
 
 ### Four-layer knowledge model
