@@ -98,6 +98,7 @@ class CrossConceptDiscoverer:
         *,
         theme_id: str,
         entry_ids: list[str] | None = None,
+        new_entry_ids: list[str] | None = None,
         max_pairs: int = 50,
         min_confidence: float = 0.6,
         exclude_existing: bool = True,
@@ -105,24 +106,64 @@ class CrossConceptDiscoverer:
     ) -> dict[str, Any]:
         """Run two-stage discovery for a theme.
 
+        Args:
+            theme_id: theme to discover within
+            entry_ids: hard scope — if set, only consider these entries (subset
+                of theme membership). Manual reruns from ThemeDetailPage.
+            new_entry_ids: incremental scope — if set, only emit candidate pairs
+                where AT LEAST ONE endpoint is in new_entry_ids. Designed for
+                the inline pipeline discover phase: "this article just brought
+                in N new concepts; bridge them to the rest of the theme without
+                re-paying for old×old pairs". Pairs entirely outside
+                new_entry_ids are dropped at recall time, not via dedupe.
+
         Returns dict with: candidates_count, discovered, skipped, errors
         """
         # Load theme and its concepts
         theme = themes.get_theme(theme_id)
         memberships = theme.get("concept_memberships", [])
         member_entry_ids = [m["entry_id"] for m in memberships]
+        theme_member_count = len(member_entry_ids)
 
         # Filter to specified entry_ids if provided
         if entry_ids:
             member_entry_ids = [eid for eid in member_entry_ids if eid in entry_ids]
 
-        # Load concept details
+        # Load concept details + tally how many distinct articles back this
+        # theme. The diagnostic answers "is candidate_pairs=0 because the
+        # theme is too small to bridge across, or because dedupe ate
+        # everything?" — added 2026-04-16 per GPT consult e297dd59ad8ab94b.
         all_entries = {e["entry_id"]: e for e in registry.list_entries()}
         concepts = []
+        article_ids: set[str] = set()
         for eid in member_entry_ids:
             entry = all_entries.get(eid)
             if entry:
                 concepts.append(entry)
+                for link in entry.get("source_links") or []:
+                    pid = link.get("project_id")
+                    if pid:
+                        article_ids.add(pid)
+        theme_article_count = len(article_ids)
+
+        # Build a "scope" snapshot so audit consumers can see the contract
+        # this run executed under without re-deriving it from defaults.
+        new_entry_id_set = set(new_entry_ids or [])
+        scope_snapshot: dict[str, Any] = {
+            "theme_id": theme_id,
+            "incremental": bool(new_entry_id_set),
+            "require_endpoint_in_new_entry_ids": bool(new_entry_id_set),
+            "different_article_required": True,
+            "exclude_existing": exclude_existing,
+            "max_pairs": max_pairs,
+            "min_confidence": min_confidence,
+        }
+        diagnostic_fields: dict[str, Any] = {
+            "scope": scope_snapshot,
+            "theme_member_count": theme_member_count,
+            "theme_article_count": theme_article_count,
+            "eligible_entry_count": len(concepts),
+        }
 
         if len(concepts) < 2:
             return {
@@ -131,13 +172,20 @@ class CrossConceptDiscoverer:
                 "skipped": 0,
                 "errors": [],
                 "reason": f"Need at least 2 concepts, got {len(concepts)}",
+                **diagnostic_fields,
             }
 
-        # Stage 1: Candidate recall
-        candidates = self._recall_candidates(concepts, exclude_existing)
+        # Stage 1: Candidate recall (incremental: at least one endpoint in
+        # new_entry_ids when provided, so we don't repay for old×old pairs).
+        candidates = self._recall_candidates(
+            concepts,
+            exclude_existing,
+            require_endpoint_in=new_entry_id_set or None,
+        )
         logger.info(
-            "Stage 1 recall: %d candidates from %d concepts",
-            len(candidates), len(concepts),
+            "Stage 1 recall: %d candidates from %d concepts across %d articles "
+            "(incremental=%s)",
+            len(candidates), len(concepts), theme_article_count, bool(new_entry_id_set),
         )
 
         # Limit pairs
@@ -145,12 +193,32 @@ class CrossConceptDiscoverer:
             candidates = candidates[:max_pairs]
 
         if not candidates:
+            # GPT consult e297dd59ad8ab94b: distinguish "split theme" (this
+            # article is the only one in the theme so there's literally
+            # nothing to bridge) from "candidates filtered by dedupe" — the
+            # former is an upstream-bucketing problem, the latter is normal
+            # idempotent rerun behaviour.
+            if new_entry_id_set and theme_article_count <= 1:
+                reason = (
+                    "Split-theme: this run is the only article in the theme "
+                    f"(theme_article_count={theme_article_count}); no other "
+                    "articles to bridge to. Likely upstream theme_proposer "
+                    "over-fragmentation, not a discover bug."
+                )
+            else:
+                reason = (
+                    "No candidate pairs after recall filtering "
+                    f"(theme_member_count={theme_member_count}, "
+                    f"theme_article_count={theme_article_count}, "
+                    f"eligible_entries={len(concepts)})"
+                )
             return {
                 "candidates_count": 0,
                 "discovered": 0,
                 "skipped": 0,
                 "errors": [],
-                "reason": "No candidate pairs after recall filtering",
+                "reason": reason,
+                **diagnostic_fields,
             }
 
         # Stage 2: LLM precision judgment
@@ -196,6 +264,7 @@ class CrossConceptDiscoverer:
             "skipped": skipped,
             "errors": errors,
             "reason": f"Discovered {discovered} relations from {len(candidates)} candidates",
+            **diagnostic_fields,
         }
 
         # Persist coverage on the theme so the panorama endpoint can surface
@@ -212,6 +281,8 @@ class CrossConceptDiscoverer:
         self,
         concepts: list[dict[str, Any]],
         exclude_existing: bool,
+        *,
+        require_endpoint_in: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Stage 1: Rule-based candidate recall (no LLM cost).
 
@@ -221,11 +292,20 @@ class CrossConceptDiscoverer:
         - Skip if same canonical/alias
         - Skip if summary is empty on both sides
         - Skip if dedupe_key already exists
+        - If require_endpoint_in is given: at least one endpoint must be in
+          that set (incremental discover — only "new ↔ existing" pairs)
         """
         candidates: list[dict[str, Any]] = []
 
         for i, a in enumerate(concepts):
             for b in concepts[i + 1:]:
+                # Incremental gate: skip pairs that don't touch the "new" set.
+                if require_endpoint_in is not None and (
+                    a["entry_id"] not in require_endpoint_in
+                    and b["entry_id"] not in require_endpoint_in
+                ):
+                    continue
+
                 # Must be from different projects
                 a_projects = {l["project_id"] for l in a.get("source_links", [])}
                 b_projects = {l["project_id"] for l in b.get("source_links", [])}
@@ -285,7 +365,19 @@ class CrossConceptDiscoverer:
     ) -> list[dict[str, Any]]:
         """Stage 2: LLM precision judgment on candidate pairs."""
         from ...utils.llm_client import LLMClient
-        llm = LLMClient()
+        from ..llm_mode_service import get_graphiti_llm_params
+
+        # Route through the runtime mode switch (local / online DeepSeek /
+        # bailian) rather than the static LLM_* env vars — keeps discovery on
+        # the same provider as graph_builder so the user's "切换抽取模式" UI
+        # actually owns this LLM call too. Snapshot once per chunk; do NOT
+        # hold a reference (the mode may have changed by the next chunk).
+        params = get_graphiti_llm_params()
+        llm = LLMClient(
+            api_key=params["api_key"],
+            base_url=params["base_url"],
+            model=params["model"],
+        )
 
         # Share one graph-data cache across every pair in this chunk so we
         # never reload a source article more than once per LLM call.
