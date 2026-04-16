@@ -8,6 +8,8 @@
 
 [English](./README-EN.md) | [中文文档](./README.md)
 
+**[在线 Demo →](https://knowledge-fabric.vercel.app/)**
+
 </div>
 
 ## 简介
