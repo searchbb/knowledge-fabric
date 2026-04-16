@@ -1,7 +1,12 @@
-import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RegistryPage from '../RegistryPage/RegistryPage.vue'
+import { setMode } from '../../runtime/appMode'
+
+// Auto-unmount between tests so orphan watch(appMode,...) subscribers
+// from earlier mounts can't re-fire loaders in later tests.
+enableAutoUnmount(afterEach)
 
 // Mock all registry API calls
 const listMock = vi.fn()
@@ -66,6 +71,8 @@ const sampleEntries = [
 describe('RegistryPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
+    setMode('live')
     listMock.mockResolvedValue({
       data: { entries: sampleEntries, total: 2 },
     })
@@ -207,5 +214,41 @@ describe('RegistryPage', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('注册表为空')
+  })
+
+  it('renders demo registry fixture without calling live listMock', async () => {
+    setMode('demo')
+    const wrapper = mount(RegistryPage, {
+      global: { mocks: { $route: { fullPath: '/workspace/registry' } } },
+    })
+    await flushPromises()
+
+    expect(listMock).not.toHaveBeenCalled()
+    // At least one canonical name from the shared entities fixture.
+    expect(wrapper.text()).toContain('OpenTelemetry')
+    expect(wrapper.text()).toContain('端到端时延')
+  })
+
+  it('roundtrip: live → demo → live swaps list contents and re-calls live loader on return', async () => {
+    setMode('live')
+    const wrapper = mount(RegistryPage, {
+      global: { mocks: { $route: { fullPath: '/workspace/registry' } } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Machine Learning')
+    const liveCountAfterMount = listMock.mock.calls.length
+    expect(liveCountAfterMount).toBe(1)
+
+    setMode('demo')
+    await flushPromises()
+    expect(wrapper.text()).toContain('OpenTelemetry')
+    expect(wrapper.text()).not.toContain('Machine Learning')
+    // Demo shouldn't have touched the live mock at all.
+    expect(listMock.mock.calls.length).toBe(liveCountAfterMount)
+
+    setMode('live')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Machine Learning')
+    expect(listMock.mock.calls.length).toBe(liveCountAfterMount + 1)
   })
 })

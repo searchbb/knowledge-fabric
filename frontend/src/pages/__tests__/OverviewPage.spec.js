@@ -1,5 +1,10 @@
-import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Without this, mounted components from earlier tests stay alive and
+// their watch(appMode, ...) callbacks fire on later setMode() calls,
+// inflating the service-mock counters in unrelated tests.
+enableAutoUnmount(afterEach)
 
 const serviceMock = vi.fn()
 vi.mock('../../api/index', () => ({ default: (...args) => serviceMock(...args) }))
@@ -11,10 +16,13 @@ vi.mock('vue-router', () => ({
 }))
 
 import OverviewPage from '../OverviewPage/OverviewPage.vue'
+import { setMode } from '../../runtime/appMode'
 
 describe('OverviewPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
+    setMode('live')
     serviceMock.mockResolvedValue({
       data: {
         projects: [
@@ -49,5 +57,38 @@ describe('OverviewPage', () => {
     const wrapper = mount(OverviewPage)
     await flushPromises()
     expect(wrapper.text()).toContain('暂无项目')
+  })
+
+  it('renders demo fixture data in demo mode without calling the live service', async () => {
+    setMode('demo')
+    const wrapper = mount(OverviewPage)
+    await flushPromises()
+
+    // Page is populated from the demo fixture, not from the axios mock.
+    expect(serviceMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('项目总览')
+    // One of the fixture project names — proves fixture actually reached the DOM.
+    expect(wrapper.text()).toContain('可观测性平台调研')
+    expect(wrapper.text()).toContain('Agentic Workflows 设计笔记')
+  })
+
+  it('switches data source when appMode flips — no white screen', async () => {
+    setMode('live')
+    const wrapper = mount(OverviewPage)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Project A')
+    expect(serviceMock).toHaveBeenCalledTimes(1)
+
+    setMode('demo')
+    await flushPromises()
+    // Content swapped to demo fixture; no crash.
+    expect(wrapper.text()).toContain('可观测性平台调研')
+    expect(wrapper.text()).not.toContain('Project A')
+
+    setMode('live')
+    await flushPromises()
+    // Back to live; live service called again.
+    expect(wrapper.text()).toContain('Project A')
+    expect(serviceMock).toHaveBeenCalledTimes(2)
   })
 })
