@@ -29,6 +29,10 @@ from ..registry import global_concept_registry as registry
 
 logger = logging.getLogger("mirofish.auto_theme_proposer")
 
+# Bumped whenever proposer decision logic changes (GPT C9 audit — lets a bad
+# decision get attributed back to a specific proposer iteration).
+PROPOSER_VERSION = "v2.candidate_visible_2026-04-16"
+
 
 @dataclass
 class AutoThemeResult:
@@ -45,6 +49,11 @@ class AutoThemeResult:
     theme_name: Optional[str] = None
     attached_concept_ids: list[str] = field(default_factory=list)
 
+    # Audit (GPT consult df46f0a3b611600b, 2026-04-16): expose what the proposer
+    # actually saw and how it decided so split-theme regressions are diagnosable
+    # from the run summary without grepping logs.
+    audit: dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "action": self.action,
@@ -57,6 +66,7 @@ class AutoThemeResult:
             "theme_id": self.theme_id,
             "theme_name": self.theme_name,
             "attached_concept_ids": self.attached_concept_ids,
+            "audit": self.audit,
         }
 
 
@@ -92,37 +102,88 @@ class AutoThemeProposer:
         article_title: str = "",
     ) -> AutoThemeResult:
         """Classify new canonical concepts into existing themes."""
+        # Snapshot the thresholds this run used so audit can explain post-hoc
+        # why a concept attached/didn't after any future tuning.
+        threshold_snapshot = {
+            "member_threshold": self.member_threshold,
+            "candidate_threshold": self.candidate_threshold,
+            "orphan_ratio_for_new_theme": self.orphan_ratio_for_new_theme,
+            "min_core_orphans_for_new_theme": self.min_core_orphans_for_new_theme,
+        }
+
         if len(new_canonical_ids) < self.min_concepts_for_action:
             return AutoThemeResult(
                 action="noop",
                 reason=f"only {len(new_canonical_ids)} canonical(s), need >= {self.min_concepts_for_action}",
+                audit={
+                    "proposer_version": PROPOSER_VERSION,
+                    "threshold_snapshot": threshold_snapshot,
+                    "visible_active_theme_count": 0,
+                    "visible_candidate_theme_count": 0,
+                    "skip_reason": "below_min_concepts",
+                },
             )
 
+        # Plumbing fix (GPT consult d10c98cab0b64a56 rule 1, 2026-04-16):
+        # before this, only status="active" themes were visible to the
+        # proposer — but auto-created themes are always status="candidate"
+        # and never get auto-promoted, so every new article saw an empty
+        # active-theme list → created its own theme island. Include
+        # candidate themes in the classification working set. Keep
+        # list_themes(status="active") semantics intact for other callers.
         active_themes = themes.list_themes(status="active")
+        candidate_themes = themes.list_themes(status="candidate")
+        classifiable_themes = list(active_themes) + list(candidate_themes)
+
+        audit: dict[str, Any] = {
+            "proposer_version": PROPOSER_VERSION,
+            "threshold_snapshot": threshold_snapshot,
+            "visible_active_theme_count": len(active_themes),
+            "visible_candidate_theme_count": len(candidate_themes),
+            "classifiable_theme_ids": [t["theme_id"] for t in classifiable_themes][:20],
+        }
+
         concepts = self._load_concept_details(new_canonical_ids)
 
         if not concepts:
-            return AutoThemeResult(action="noop", reason="no concept details found")
+            audit["skip_reason"] = "no_concept_details"
+            return AutoThemeResult(action="noop", reason="no concept details found", audit=audit)
 
-        # If no active themes exist, everything is orphan → propose candidate
-        if not active_themes:
-            return self._handle_no_themes(concepts, run_id, article_title)
+        # If neither active nor candidate themes exist, this is a genuine
+        # first-article cold start → propose candidate.
+        if not classifiable_themes:
+            audit["decision"] = "create_theme_cold_start"
+            result = self._handle_no_themes(concepts, run_id, article_title)
+            result.audit = {**audit, **result.audit}
+            return result
 
-        # LLM classification
+        # LLM classification against the unified working set. The prompt
+        # exposes theme.status so the LLM can weight stable active themes
+        # over provisional candidates (GPT consult rule 1 副作用防护).
         try:
-            llm_result = self._classify_via_llm(concepts, active_themes, article_title)
+            llm_result = self._classify_via_llm(
+                concepts, classifiable_themes, article_title
+            )
+            audit["classification_source"] = "llm"
         except Exception as e:
             logger.warning("LLM classification failed, falling back to keyword match: %s", e)
-            llm_result = self._fallback_keyword_match(concepts, active_themes)
+            llm_result = self._fallback_keyword_match(concepts, classifiable_themes)
+            audit["classification_source"] = "keyword_fallback"
+            audit["llm_error"] = str(e)[:200]
             if llm_result is None:
                 return AutoThemeResult(
                     action="noop", degraded=True,
                     reason=f"LLM failed and keyword fallback found no matches: {e}",
+                    audit=audit,
                 )
 
-        return self._apply_classification(
-            llm_result, concepts, active_themes, run_id, article_title
+        result = self._apply_classification(
+            llm_result, concepts, classifiable_themes, run_id, article_title
         )
+        # Preserve run-level audit without clobbering anything classification
+        # downstream may have added.
+        result.audit = {**audit, **result.audit}
+        return result
 
     def _load_concept_details(self, entry_ids: list[str]) -> list[dict]:
         all_entries = {e["entry_id"]: e for e in registry.list_entries()}
@@ -160,6 +221,7 @@ class AutoThemeProposer:
             themes_for_prompt.append({
                 "theme_id": t["theme_id"],
                 "name": t["name"],
+                "status": t.get("status", "active"),
                 "description": t.get("description", ""),
                 "keywords": t.get("keywords", []),
                 "example_concepts": member_names[:5],
@@ -174,6 +236,10 @@ class AutoThemeProposer:
             "你是知识治理系统中的主题归属判定器。\n"
             "你的任务不是为每篇文章发明新主题，而是把 canonical 概念归入少量稳定的全局主题。\n"
             "优先复用已有主题，谨慎提议新主题。\n"
+            "主题列表中每个主题都带有 status 字段：\n"
+            "  - status=active 表示该主题已稳定运行，跨多文章存在；优先归到这里。\n"
+            "  - status=candidate 表示该主题仍在观察期（单文章/新建）；可以归入，\n"
+            "    但证据需要略强（如多个概念和该主题高度相关），否则说明是另一个主题域。\n"
             "主题应该是可跨文章持续累积的问题域、方法域或工作域。\n"
             "工具名/产品名/单篇文章标题通常不是主题。\n"
             "严格返回 JSON，不要输出 markdown。"
