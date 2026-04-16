@@ -76,7 +76,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[为什么现在不做"所有 Theme 两两 Discover"？] --> B[因为成本会变成 O&#40;N²&#41;]
+    A[为什么现在不做'所有 Theme 两两 Discover'？] --> B[因为成本会变成 O&#40;N²&#41;]
     B --> C[Theme 多了以后<br/>token 与延迟都会爆]
     C --> D[当前策略：<br/>只在同 Theme 内增量 Discover]
     D --> E[先靠 M2 / M3 把知识尽量收拢到少量稳定 Theme]
