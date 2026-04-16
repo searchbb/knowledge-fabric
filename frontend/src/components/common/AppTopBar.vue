@@ -11,6 +11,10 @@
     </nav>
 
     <div class="topbar-actions">
+      <!-- Demo-mode status pill. Only renders when mode === 'demo'. Sits
+           to the LEFT of all action buttons so users always see it
+           before interacting, without shouting at them. -->
+      <DemoBadge />
       <slot name="actions">
         <CopyLinkButton v-if="showCopy" />
         <a
@@ -25,6 +29,10 @@
           <span class="label">新页</span>
         </a>
       </slot>
+      <!-- Live/Demo toggle. Lives OUTSIDE the `actions` slot so pages
+           that override `topbar-actions` (e.g. WorkspacePage) still get
+           the toggle — the whole point is that it's always reachable. -->
+      <AppModeToggle />
       <AppUserMenu />
     </div>
   </header>
@@ -35,6 +43,8 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import CopyLinkButton from './CopyLinkButton.vue'
 import AppUserMenu from './AppUserMenu.vue'
+import AppModeToggle from './AppModeToggle.vue'
+import DemoBadge from './DemoBadge.vue'
 
 const props = defineProps({
   crumbs: {

@@ -58,7 +58,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import service from '../../api/index'
+// Sidebar project list must flip with the rest of the app when demo
+// mode is active. Route reads through dataClient; re-fetch on mode flip.
+import { getOverview } from '../../data/dataClient'
+import { appMode } from '../../runtime/appMode'
 
 const props = defineProps({
   currentProjectId: { type: String, default: '' },
@@ -95,14 +98,25 @@ async function loadProjects() {
   loading.value = true
   error.value = ''
   try {
-    const res = await service({ url: '/api/registry/overview', method: 'get' })
+    const res = await getOverview()
     projects.value = res.data?.projects || []
   } catch (e) {
     error.value = e.message || '加载项目列表失败'
+    // Clear stale projects so a failed live→demo→live transition doesn't
+    // keep showing projects from the wrong mode.
+    projects.value = []
   } finally {
     loading.value = false
   }
 }
+
+// Re-fetch on mode flip so the sidebar's current project label / dropdown
+// reflect whichever world we're now in.
+watch(appMode, () => {
+  // Only re-fetch if the switcher is actively in use (has loaded once).
+  // Otherwise wait for the lazy trigger on next open.
+  if (projects.value.length || loading.value) loadProjects()
+})
 
 function toggle() {
   isOpen.value = !isOpen.value
