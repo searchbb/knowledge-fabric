@@ -74,21 +74,33 @@ def build_structured_json_response_format(
 
 class LLMClient:
     """LLM客户端"""
-    
+
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None
     ):
+        # NOTE (2026-04-16): Earlier this constructor auto-routed bare LLMClient()
+        # calls through llm_mode_service so every utility (ontology gen, theme
+        # proposer, quality_gate.backfill_summaries, reading-structure
+        # extraction) followed the auto-pipeline mode switch. That overshot the
+        # user's intent: 百炼 was approved as the *graph extraction* provider
+        # (Graphiti chunks), but Bailian's tail latency on the many-small
+        # backfill summary calls is ~10-50x worse than DeepSeek (one 50-node
+        # backfill batch took 16 min vs 21s on DeepSeek), which blew past the
+        # pipeline stall watchdog. We keep the explicit routing only where the
+        # user opted in (graph_builder uses get_graphiti_llm_params; the cross-
+        # concept discoverer's _llm_judge passes params explicitly). Everyone
+        # else stays on the static LLM_* env config.
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
         self.timeout_seconds = Config.LLM_TIMEOUT_SECONDS
-        
+
         if not self.api_key:
             raise ValueError("LLM_API_KEY 未配置")
-        
+
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url
