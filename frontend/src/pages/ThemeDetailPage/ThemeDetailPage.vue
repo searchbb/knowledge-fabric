@@ -285,8 +285,10 @@ import { useRoute } from 'vue-router'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
 import CrossRelationCard from '../../components/CrossRelationCard.vue'
-import { getThemePanorama } from '../../services/api/themeApi'
+// Read flips live/demo via dataClient; writes stay on the live API.
+import { getThemePanorama } from '../../data/dataClient'
 import { discoverCrossRelations, updateCrossRelation, deleteCrossRelation } from '../../services/api/registryApi'
+import { appMode } from '../../runtime/appMode'
 
 const route = useRoute()
 const props = defineProps({ themeId: String })
@@ -415,6 +417,11 @@ async function loadPanorama() {
     const res = await getThemePanorama(tid)
     panorama.value = res.data
   } catch (e) {
+    // Also clear the stale panorama — otherwise when a subsequent load
+    // fails (e.g. switching live→demo for a theme that doesn't exist in
+    // demo fixtures), the previous theme's content stays on screen and
+    // the error card is hidden behind v-if="panorama" branches.
+    panorama.value = null
     error.value = e.message || '加载失败'
   } finally {
     loading.value = false
@@ -460,6 +467,8 @@ async function handleDelete(relationId) {
 
 onMounted(loadPanorama)
 watch(() => route.params.themeId, loadPanorama)
+// Reload panorama when live/demo flips so the theme page swaps source.
+watch(appMode, loadPanorama)
 </script>
 
 <style scoped>

@@ -160,6 +160,7 @@
 <script setup>
 import { computed, watch } from 'vue'
 import { conceptStore, loadConceptView, selectConcept } from '../../stores/conceptStore'
+import { appMode } from '../../runtime/appMode'
 
 const props = defineProps({
   project: {
@@ -237,6 +238,15 @@ watch(
   },
   { immediate: true },
 )
+
+// Re-fetch on live/demo flip so this sub-view reloads alongside the
+// parent WorkspacePage instead of keeping the previous mode's data.
+watch(appMode, async () => {
+  await loadConceptView({
+    projectId: props.project?.project_id,
+    project: props.project,
+  })
+})
 </script>
 
 <style scoped>

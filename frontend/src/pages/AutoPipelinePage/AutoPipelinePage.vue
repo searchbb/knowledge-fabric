@@ -19,13 +19,13 @@
 
     <div v-if="error" class="state-card error-card">{{ error }}</div>
 
-    <!-- LLM 抽取模式开关 (2026-04-11: 本地 qwen3 太慢 → 支持切 DeepSeek 在线) -->
+    <!-- LLM 抽取模式开关 (2026-04-15: 本地 qwen3 太慢 → 支持切百炼在线 DashScope qwen3.5-plus) -->
     <article class="mode-card">
       <div class="mode-header">
         <div>
           <div class="card-title">抽取模式</div>
           <p class="section-copy mini-copy">
-            切换 Graphiti 抽取走本地 LM Studio 还是 DeepSeek 在线 API。切换只影响下一个任务,
+            切换 Graphiti 抽取走本地 LM Studio 还是百炼（DashScope）在线 API。切换只影响下一个任务,
             有任务在跑的时候会被拒绝。
           </p>
         </div>
@@ -43,15 +43,15 @@
           <span class="mode-btn-sub">并发 {{ mode.meta.local_semaphore ?? '?' }}</span>
         </button>
         <button
-          :class="['mode-btn', mode.current === 'online' ? 'mode-btn-active' : '']"
-          :disabled="mode.switching || mode.current === 'online' || !mode.meta.deepseek_configured"
-          @click="switchMode('online')"
+          :class="['mode-btn', mode.current === 'bailian' ? 'mode-btn-active' : '']"
+          :disabled="mode.switching || mode.current === 'bailian' || !mode.meta.bailian_configured"
+          @click="switchMode('bailian')"
         >
-          <span class="mode-btn-title">在线 · DeepSeek</span>
-          <span class="mode-btn-sub">{{ mode.meta.deepseek_model || 'deepseek-chat' }}</span>
-          <span class="mode-btn-sub">并发 {{ mode.meta.deepseek_semaphore ?? '?' }}</span>
-          <span v-if="!mode.meta.deepseek_configured" class="mode-btn-warn">
-            .env 未配置 DEEPSEEK_API_KEY
+          <span class="mode-btn-title">在线 · 百炼</span>
+          <span class="mode-btn-sub">{{ mode.meta.bailian_model || 'qwen3.5-plus' }}</span>
+          <span class="mode-btn-sub">并发 {{ mode.meta.bailian_semaphore ?? '?' }}</span>
+          <span v-if="!mode.meta.bailian_configured" class="mode-btn-warn">
+            .env 未配置 BAILIAN_API_KEY
           </span>
         </button>
       </div>
@@ -61,7 +61,7 @@
       </div>
       <div v-if="!mode.loading" class="mode-meta">
         当前：
-        <strong>{{ mode.current === 'online' ? '在线 DeepSeek' : '本地 qwen3' }}</strong>
+        <strong>{{ mode.current === 'bailian' ? '在线 百炼' : '本地 qwen3' }}</strong>
         <template v-if="mode.meta.updated_at"> · 最近更新 {{ mode.meta.updated_at }}</template>
         <template v-if="mode.meta.in_flight_count > 0"> · 有 {{ mode.meta.in_flight_count }} 个任务在跑，暂不能切换</template>
       </div>
@@ -246,8 +246,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+// Read paths (pending-urls / graph-tasks / llm-mode) flip live↔demo via
+// dataClient. Write paths (add URL / process / retry / switch mode)
+// continue to use the raw axios `service` — the interceptor in
+// api/index.js blocks them in demo mode with a friendly error so demo
+// mode never pollutes the real backend.
 import service from '../../api/index'
+import {
+  listAutoPendingUrls,
+  listGraphTasks,
+  getLlmMode,
+} from '../../data/dataClient'
+import { appMode } from '../../runtime/appMode'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
 
@@ -361,7 +372,7 @@ async function loadQueue() {
   loading.value = true
   error.value = ''
   try {
-    const res = await service({ url: '/api/auto/pending-urls', method: 'get' })
+    const res = await listAutoPendingUrls()
     const d = res.data || {}
     buckets.value = {
       pending: d.pending || [],
@@ -370,6 +381,9 @@ async function loadQueue() {
       errored: d.errored || [],
     }
   } catch (e) {
+    // Clear stale buckets on error so demo↔live switches don't leave
+    // the previous mode's data visible.
+    buckets.value = { pending: [], in_flight: [], processed: [], errored: [] }
     error.value = e.message || '加载队列失败'
   } finally {
     loading.value = false
@@ -381,10 +395,7 @@ async function loadQueue() {
 // Silent on error — this is progress UI, not a critical path.
 async function refreshActiveTask() {
   try {
-    const res = await service({
-      url: '/api/graph/tasks',
-      method: 'get',
-    })
+    const res = await listGraphTasks()
     const tasks = res.data || []
     const active = tasks.find(
       (t) =>
@@ -608,7 +619,7 @@ async function loadMode() {
   const firstLoad = mode.value.meta && Object.keys(mode.value.meta).length === 0
   if (firstLoad) mode.value.loading = true
   try {
-    const res = await service({ url: '/api/config/llm-mode', method: 'get' })
+    const res = await getLlmMode()
     const d = res.data || {}
     mode.value.current = d.mode || 'local'
     mode.value.meta = d
@@ -640,8 +651,8 @@ async function switchMode(target) {
     mode.value.current = d.mode || target
     mode.value.meta = d
     mode.value.message =
-      target === 'online'
-        ? `已切换到在线 DeepSeek（${d.deepseek_model || 'deepseek-chat'}，并发 ${d.deepseek_semaphore ?? '?'}）。下一个任务生效。`
+      target === 'bailian'
+        ? `已切换到在线 百炼（${d.bailian_model || 'qwen3.5-plus'}，并发 ${d.bailian_semaphore ?? '?'}）。下一个任务生效。`
         : `已切换到本地 ${d.local_model || 'qwen3'}（并发 ${d.local_semaphore ?? '?'}）。下一个任务生效。`
     mode.value.messageKind = 'ok'
   } catch (e) {
@@ -650,8 +661,8 @@ async function switchMode(target) {
     if (code === 'IN_FLIGHT') {
       mode.value.message = resp.error || '有任务正在执行，暂时不能切换'
       mode.value.messageKind = 'warn'
-    } else if (code === 'DEEPSEEK_NOT_CONFIGURED') {
-      mode.value.message = resp.error || 'DEEPSEEK_API_KEY 未在 .env 配置'
+    } else if (code === 'BAILIAN_NOT_CONFIGURED') {
+      mode.value.message = resp.error || 'BAILIAN_API_KEY 未在 .env 配置'
       mode.value.messageKind = 'err'
     } else {
       mode.value.message = resp.error || e.message || '切换模式失败'
@@ -674,6 +685,13 @@ onMounted(async () => {
   await refreshActiveTask()
   await loadMode()
   startPoll()
+})
+
+// Re-hydrate all three pipeline reads when live/demo flips.
+watch(appMode, async () => {
+  await loadQueue()
+  await refreshActiveTask()
+  await loadMode()
 })
 </script>
 

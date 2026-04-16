@@ -119,6 +119,7 @@
 <script setup>
 import { computed, watch } from 'vue'
 import { evolutionStore, loadEvolutionView } from '../../stores/evolutionStore'
+import { appMode } from '../../runtime/appMode'
 
 const props = defineProps({
   project: {
@@ -175,6 +176,14 @@ watch(
   },
   { immediate: true },
 )
+
+// Reload when live/demo flips.
+watch(appMode, async () => {
+  await loadEvolutionView({
+    projectId: props.project?.project_id,
+    project: props.project,
+  })
+})
 </script>
 
 <style scoped>

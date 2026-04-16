@@ -1,6 +1,9 @@
 import { reactive } from 'vue'
+// Read goes through dataClient (live↔demo dispatch). Writes stay on the
+// live API path; the axios interceptor blocks them in demo mode and
+// surfaces a friendly error.
+import { getConceptView } from '../data/dataClient'
 import {
-  getConceptView,
   putConceptDecision,
   deleteConceptDecision,
   postConceptMergeSuggest,

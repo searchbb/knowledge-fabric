@@ -73,7 +73,8 @@ import {
   normalizeWorkspaceView,
   workspaceStore,
 } from '../../stores/workspaceStore'
-import { loadProjectWorkbenchState } from '../../utils/projectWorkbenchState'
+import { getProjectWorkbench } from '../../data/dataClient'
+import { appMode } from '../../runtime/appMode'
 
 const route = useRoute()
 const router = useRouter()
@@ -160,7 +161,7 @@ async function loadWorkspace() {
   loading.value = true
   error.value = ''
   try {
-    const state = await loadProjectWorkbenchState(pid)
+    const state = await getProjectWorkbench(pid)
     projectData.value = state.project
     graphData.value = state.graphData
     phase1TaskResult.value = state.phase1TaskResult
@@ -171,6 +172,16 @@ async function loadWorkspace() {
     workspaceStore.phase1TaskResult = state.phase1TaskResult
     workspaceStore.error = ''
   } catch (loadError) {
+    // Clear stale project/graph state on error — otherwise, switching
+    // live↔demo for a project that exists in one mode but not the other
+    // leaves the old project's breadcrumb + metadata visible alongside
+    // the error card.
+    projectData.value = null
+    graphData.value = null
+    phase1TaskResult.value = null
+    workspaceStore.project = null
+    workspaceStore.graphData = null
+    workspaceStore.phase1TaskResult = null
     error.value = loadError.message || '工作台加载失败'
     workspaceStore.error = error.value
   } finally {
@@ -205,6 +216,12 @@ watch(
   },
   { immediate: true },
 )
+
+// Reload when live/demo flips so the workspace swaps data source without
+// a browser refresh.
+watch(appMode, () => {
+  loadWorkspace()
+})
 </script>
 
 <style scoped>

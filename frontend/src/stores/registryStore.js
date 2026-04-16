@@ -1,7 +1,17 @@
 import { reactive } from 'vue'
+// Reads go through the dataClient boundary so demo mode swaps the
+// response source without any page-level conditionals.
 import {
   listRegistryConcepts,
   getRegistryConcept,
+  listCrossRelations,
+  getCrossRelationCounts,
+} from '../data/dataClient'
+// Writes + niche reads (search, suggest, alignment, link/unlink) stay on
+// the live-only registryApi. In demo mode, pressing a write button will
+// surface a friendly error via actionError — matches the existing error
+// pattern. This keeps the read-only demo experience clean.
+import {
   createRegistryConcept,
   updateRegistryConcept,
   deleteRegistryConcept,
@@ -10,10 +20,8 @@ import {
   searchRegistryConcepts,
   suggestFromProject,
   getProjectAlignment,
-  listCrossRelations,
   updateCrossRelation,
   deleteCrossRelation,
-  getCrossRelationCounts,
 } from '../services/api/registryApi'
 
 export const registryStore = reactive({

@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
-import { getEvolutionView } from '../services/api/evolutionApi'
+// Read goes through dataClient so live/demo mode swaps automatically.
+import { getEvolutionView } from '../data/dataClient'
 import { createEmptyEvolutionViewModel } from '../types/evolution'
 
 export const evolutionStore = reactive({

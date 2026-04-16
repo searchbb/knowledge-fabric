@@ -37,8 +37,23 @@
         <!-- Concepts tab (default, existing content below) -->
         <template v-else>
 
-        <!-- Stats row -->
-        <div class="summary-grid">
+        <!-- Error: show FIRST when the backend failed. The stats row and
+             toolbar below display "0" / active buttons, so rendering them
+             above the error card reads as "empty registry" instead of
+             "we never reached the backend". Surface the diagnosis before
+             the shell so the user isn't misled. -->
+        <div v-if="registryStore.error" class="state-card error-card">
+          <div class="card-title">加载失败</div>
+          <div class="metric-line">{{ registryStore.error }}</div>
+        </div>
+
+        <!-- Loading -->
+        <div v-else-if="registryStore.loading" class="state-card">
+          <div class="card-title">正在加载注册表</div>
+        </div>
+
+        <!-- Stats row (only when not erroring/loading) -->
+        <div v-else class="summary-grid">
           <article class="card">
             <div class="card-title">注册表条目</div>
             <div class="metric-value">{{ registryStore.total }}</div>
@@ -53,6 +68,10 @@
           </article>
         </div>
 
+        <!-- Toolbar + main layout — same gating as stats row, but
+             using v-if (not v-else) since they are siblings of the
+             error/loading/stats triplet above, not part of its v-if chain. -->
+        <template v-if="!registryStore.error && !registryStore.loading">
         <!-- Search bar + create button -->
         <div class="toolbar">
           <input
@@ -66,19 +85,8 @@
           <button class="btn-primary" @click="showCreateForm = true">新建条目</button>
         </div>
 
-        <!-- Error -->
-        <div v-if="registryStore.error" class="state-card error-card">
-          <div class="card-title">加载失败</div>
-          <div class="metric-line">{{ registryStore.error }}</div>
-        </div>
-
-        <!-- Loading -->
-        <div v-else-if="registryStore.loading" class="state-card">
-          <div class="card-title">正在加载注册表</div>
-        </div>
-
         <!-- Main layout -->
-        <div v-else class="registry-layout">
+        <div class="registry-layout">
           <!-- Left: entry list -->
           <article class="card queue-card">
             <div class="card-header">
@@ -383,7 +391,8 @@
             </template>
           </article>
         </div>
-        </template>
+        </template><!-- /non-error, non-loading -->
+        </template><!-- /concepts tab (default) -->
       </section>
     </main>
   </AppShell>
@@ -414,6 +423,7 @@ import {
   reviewCrossRelation,
   removeCrossRelation,
 } from '../../stores/registryStore'
+import { appMode } from '../../runtime/appMode'
 
 const route = useRoute()
 const router = useRouter()
@@ -802,12 +812,22 @@ async function handleExport() {
   }
 }
 
-onMounted(async () => {
+async function hydrateRegistry() {
   await loadEntries()
-  // Load cross-relation counts for badge display
   const entryIds = registryStore.entries.map(e => e.entry_id)
   if (entryIds.length) loadCrossRelationCounts(entryIds)
-})
+  // Re-hydrate the currently-selected entry if one is set, so the
+  // middle detail panel flips to the new data source too.
+  if (registryStore.selectedEntryId) {
+    await selectEntry(registryStore.selectedEntryId)
+    await loadCrossRelations(registryStore.selectedEntryId)
+  }
+}
+
+onMounted(hydrateRegistry)
+
+// Reload registry on mode flip so the list + counts switch together.
+watch(appMode, () => { hydrateRegistry() })
 </script>
 
 <style scoped>

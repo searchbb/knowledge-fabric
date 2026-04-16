@@ -127,12 +127,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
-import {
-  getCrossRelation,
-  updateCrossRelation,
-  deleteCrossRelation,
-  getRegistryConcept,
-} from '../../services/api/registryApi'
+// Reads flip live/demo via dataClient; writes stay on live API.
+import { getCrossRelation, getRegistryConcept } from '../../data/dataClient'
+import { updateCrossRelation, deleteCrossRelation } from '../../services/api/registryApi'
+import { appMode } from '../../runtime/appMode'
 
 const route = useRoute()
 const router = useRouter()
@@ -252,6 +250,8 @@ async function handleDelete() {
 
 onMounted(loadRelation)
 watch(relationId, loadRelation)
+// Reload when live/demo flips.
+watch(appMode, loadRelation)
 </script>
 
 <style scoped>

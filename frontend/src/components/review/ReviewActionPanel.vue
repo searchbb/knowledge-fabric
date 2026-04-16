@@ -10,13 +10,18 @@
       <div class="status-note">{{ task?.lastDecisionLabel || '尚未执行动作' }}</div>
     </article>
 
+    <p v-if="readonly" class="readonly-notice">
+      Demo 模式只读：审核动作已禁用，不会写到任何后端。
+    </p>
+
     <div class="action-group">
       <button
         v-for="decision in decisions"
         :key="decision.key"
         class="decision-button"
         :class="decision.tone"
-        :disabled="!task"
+        :disabled="!task || readonly"
+        :title="readonly ? 'Demo 模式只读' : ''"
         @click="$emit('apply-decision', decision.key)"
       >
         {{ decision.label }}
@@ -28,8 +33,8 @@
       <textarea
         class="manual-note"
         :value="task?.manualNote || ''"
-        :disabled="!task"
-        placeholder="例如：把 Markdown 视为工具层 canonical，格式与内容分离更像它的机制，不要直接合并。"
+        :disabled="!task || readonly"
+        :placeholder="readonly ? 'Demo 模式只读，无法编辑说明。' : '例如：把 Markdown 视为工具层 canonical，格式与内容分离更像它的机制，不要直接合并。'"
         @input="$emit('update-manual-note', $event.target.value)"
       />
       <div class="signal-line">你的说明会被记录为当前任务的人工指导语，用来约束后续 AI 处理方向。</div>
@@ -71,6 +76,10 @@ const props = defineProps({
   phase1TaskResult: {
     type: Object,
     default: null,
+  },
+  readonly: {
+    type: Boolean,
+    default: false,
   },
 })
 
@@ -135,6 +144,17 @@ const warningCount = computed(() => props.phase1TaskResult?.build_outcome?.warni
   display: grid;
   grid-template-columns: 1fr;
   gap: 10px;
+}
+
+.readonly-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid #d8b483;
+  background: #fff5e0;
+  color: #875612;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .decision-button {

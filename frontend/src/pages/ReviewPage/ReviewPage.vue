@@ -78,6 +78,7 @@ import {
   updateReviewManualNote,
 } from '../../stores/reviewStore'
 import { matchesReviewFilter } from '../../types/review'
+import { appMode } from '../../runtime/appMode'
 
 const props = defineProps({
   project: {
@@ -122,6 +123,14 @@ watch(
   },
   { immediate: true },
 )
+
+// Reload when live/demo flips.
+watch(appMode, async () => {
+  await loadReviewView({
+    projectId: props.project?.project_id,
+    project: props.project,
+  })
+})
 </script>
 
 <style scoped>

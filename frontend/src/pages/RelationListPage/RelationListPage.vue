@@ -1,9 +1,11 @@
 <template>
   <AppShell :crumbs="crumbs">
     <template #topbar-actions>
-      <button class="topbar-btn" :disabled="discovering" @click="handleDiscover" title="让 LLM 基于全部概念发现新的跨文关系">
-        <span class="icon">✨</span><span class="label">{{ discovering ? '发现中...' : '发现新关系' }}</span>
-      </button>
+      <!-- "发现新关系" 全局按钮已移除 (2026-04-16, GPT consult f09fb61ce5e8a061):
+           跨文关系发现现在内嵌在自动 pipeline 的 discover phase；想对单个主题
+           重跑发现，请去主题详情页用那里的 "发现新关系" 按钮。原全局按钮的
+           本意是 "对所有主题全量重发现"，成本高且语义模糊（且之前还带个空
+           theme_id 的 400 bug），直接拿掉。 -->
       <CopyLinkButton />
       <a class="topbar-btn" :href="$route.fullPath" target="_blank" rel="noopener" title="在新页面打开">
         <span class="icon">↗</span><span class="label">新页</span>
@@ -17,8 +19,11 @@
         <p class="page-subtitle">LLM 从全局概念池发现的跨文章关联。可筛选、审阅、追溯证据。</p>
       </header>
 
-      <!-- Filter bar -->
-      <div class="filter-bar">
+      <!-- Filter bar — hidden when the load failed, otherwise the chip
+           counts read as "all categories empty" rather than "we never
+           reached the backend". Keep the bar visible for normal empty
+           and loaded states. -->
+      <div v-if="!loadError" class="filter-bar">
         <div class="filter-group">
           <button
             v-for="s in statusOpts"
@@ -47,13 +52,14 @@
         </div>
       </div>
 
-      <div v-if="discoverMsg" class="discover-banner" :class="{ error: discoverError }">{{ discoverMsg }}</div>
-
       <!-- List -->
       <div v-if="loading" class="state-card">加载中...</div>
-      <div v-else-if="loadError" class="state-card error-card">{{ loadError }}</div>
+      <div v-else-if="loadError" class="state-card error-card">
+        <div class="error-title">加载失败</div>
+        <div>{{ loadError }}</div>
+      </div>
       <div v-else-if="!filteredRelations.length" class="state-card">
-        <template v-if="!allRelations.length">暂无跨文关系。点击右上角"发现新关系"让 LLM 尝试生成。</template>
+        <template v-if="!allRelations.length">暂无跨文关系。新文章入库时会自动发现关系；如需对单个主题重跑，请到主题详情页。</template>
         <template v-else>当前筛选下无匹配关系。</template>
       </div>
       <div v-else class="relation-list">
@@ -89,10 +95,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
-import { listCrossRelations, discoverCrossRelations, listRegistryConcepts } from '../../services/api/registryApi'
+// Reads flip live/demo via dataClient.
+import { listCrossRelations, listRegistryConcepts } from '../../data/dataClient'
+import { appMode } from '../../runtime/appMode'
 
 const crumbs = [
   { label: '跨项目', to: '/workspace/registry' },
@@ -103,9 +111,6 @@ const allRelations = ref([])
 const conceptMap = ref({}) // entry_id -> { canonical_name, concept_type }
 const loading = ref(false)
 const loadError = ref('')
-const discovering = ref(false)
-const discoverMsg = ref('')
-const discoverError = ref(false)
 
 const filter = reactive({
   status: 'all',
@@ -201,24 +206,9 @@ async function loadAll() {
   }
 }
 
-async function handleDiscover() {
-  discovering.value = true
-  discoverMsg.value = ''
-  discoverError.value = false
-  try {
-    const res = await discoverCrossRelations({})
-    const summary = res.data || {}
-    discoverMsg.value = `发现完成：新增 ${summary.created || 0} 条 / 复活 ${summary.resurrected || 0} 条 / 已跳过 ${summary.skipped || 0} 条`
-    await loadAll()
-  } catch (e) {
-    discoverError.value = true
-    discoverMsg.value = '发现失败：' + (e.message || '未知错误')
-  } finally {
-    discovering.value = false
-  }
-}
-
 onMounted(loadAll)
+// Reload when live/demo flips.
+watch(appMode, loadAll)
 </script>
 
 <style scoped>
@@ -288,20 +278,6 @@ onMounted(loadAll)
   color: #3f4552;
 }
 
-.discover-banner {
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid #a5d6a7;
-  background: #e8f5e9;
-  color: #2e7d32;
-  font-size: 13px;
-}
-.discover-banner.error {
-  border-color: #ef9a9a;
-  background: #ffebee;
-  color: #c62828;
-}
-
 .state-card {
   border: 1px solid #d4dce8;
   border-radius: 12px;
@@ -311,6 +287,7 @@ onMounted(loadAll)
   font-size: 13px;
 }
 .error-card { border-color: #e2b0a8; background: #fff8f6; color: #c62828; }
+.error-title { font-weight: 700; margin-bottom: 4px; }
 
 .relation-list { display: flex; flex-direction: column; gap: 10px; }
 .relation-row {

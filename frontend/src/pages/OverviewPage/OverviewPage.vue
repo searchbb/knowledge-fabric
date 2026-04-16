@@ -108,9 +108,10 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import service from '../../api/index'
+import { computed, onMounted, ref, watch } from 'vue'
 import AppShell from '../../components/common/AppShell.vue'
+import { getOverview } from '../../data/dataClient'
+import { appMode } from '../../runtime/appMode'
 
 const crumbs = [
   { label: '按项目', to: '/workspace/overview' },
@@ -189,8 +190,9 @@ const filteredProjects = computed(() => {
 
 async function loadOverview() {
   loading.value = true
+  error.value = ''
   try {
-    const res = await service({ url: '/api/registry/overview', method: 'get' })
+    const res = await getOverview()
     data.value = res.data || {}
   } catch (e) {
     error.value = e.message || '加载失败'
@@ -200,6 +202,12 @@ async function loadOverview() {
 }
 
 onMounted(loadOverview)
+
+// Refetch when the user flips Live/Demo in the topbar so the page
+// reflects the new data source immediately — no full browser reload.
+watch(appMode, () => {
+  loadOverview()
+})
 </script>
 
 <style scoped>

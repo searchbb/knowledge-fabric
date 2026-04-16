@@ -139,15 +139,20 @@ import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
 import CrossRelationCard from '../../components/CrossRelationCard.vue'
+// Reads flip live/demo via dataClient; writes stay on the live API
+// (the axios interceptor blocks mutations in demo mode).
 import {
   getRegistryConcept,
+  listCrossRelations,
+  listRegistryConcepts,
+} from '../../data/dataClient'
+import {
   unlinkProjectConcept,
   updateCrossRelation,
   deleteCrossRelation,
-  listCrossRelations,
-  listRegistryConcepts,
   deleteRegistryConcept,
 } from '../../services/api/registryApi'
+import { appMode } from '../../runtime/appMode'
 
 const route = useRoute()
 const router = useRouter()
@@ -246,6 +251,9 @@ async function loadEntry() {
     const res = await getRegistryConcept(entryId.value)
     entry.value = res.data || null
   } catch (e) {
+    // Clear stale entry so live↔demo switches don't leave the previous
+    // concept's data visible alongside the new error.
+    entry.value = null
     loadError.value = e.message || '加载条目失败'
   } finally {
     loading.value = false
@@ -329,6 +337,11 @@ onMounted(async () => {
 watch(entryId, async (next) => {
   if (!next) return
   await Promise.all([loadEntry(), loadRelations()])
+})
+
+// Reload entry + relations when live/demo flips.
+watch(appMode, async () => {
+  await Promise.all([loadEntry(), loadRelations(), loadEntryIndex()])
 })
 </script>
 

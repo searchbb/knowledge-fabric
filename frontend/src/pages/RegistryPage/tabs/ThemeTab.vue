@@ -158,9 +158,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import service from '../../../api/index'
 import { registryStore, loadEntries } from '../../../stores/registryStore'
+import { listThemesViaRegistryTab } from '../../../data/dataClient'
+import { appMode } from '../../../runtime/appMode'
 
 const themes = ref([])
 const loading = ref(false)
@@ -186,8 +188,9 @@ function resolveConceptLabel(entryId) {
 
 async function loadThemes() {
   loading.value = true
+  error.value = ''
   try {
-    const res = await service({ url: '/api/registry/themes', method: 'get' })
+    const res = await listThemesViaRegistryTab()
     themes.value = res.data?.themes || []
   } catch (e) {
     error.value = e.message || '加载失败'
@@ -195,6 +198,12 @@ async function loadThemes() {
     loading.value = false
   }
 }
+
+// Refetch when live/demo flips.
+watch(appMode, () => {
+  loadThemes()
+  if (!registryStore.entries?.length) loadEntries()
+})
 
 function selectTheme(t) {
   selectedId.value = t.theme_id

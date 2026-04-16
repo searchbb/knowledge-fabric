@@ -15,9 +15,16 @@
       用户可以创建/合并主题，auto-pipeline 会自动把概念归入已有主题。
     </p>
 
-    <div v-if="error" class="state-card error-card">{{ error }}</div>
+    <!-- When the load failed we want the error to fully take over: the
+         "主题列表" sidebar below otherwise renders "暂无主题。点击新建主题..."
+         next to a Network Error card, which reads as "list is genuinely
+         empty" rather than "we never reached the backend". -->
+    <div v-if="error" class="state-card error-card">
+      <div class="error-title">加载失败</div>
+      <div>{{ error }}</div>
+    </div>
 
-    <div class="hub-layout">
+    <div v-else class="hub-layout">
       <!-- Left: Theme list -->
       <aside class="theme-sidebar">
         <div class="sidebar-header">
@@ -168,17 +175,21 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
+// Reads flip live/demo via dataClient; writes stay on the live API path.
 import {
   listGlobalThemes,
   getThemeHubView,
+  getOrphans,
+} from '../../data/dataClient'
+import {
   createGlobalTheme,
   promoteCandidate,
   rejectCandidate,
-  getOrphans,
 } from '../../services/api/themeApi'
+import { appMode } from '../../runtime/appMode'
 
 const crumbs = [
   { label: '跨项目', to: '/workspace/registry' },
@@ -270,10 +281,20 @@ async function doReject(entryId) {
   }
 }
 
-onMounted(async () => {
+async function hydrateHub() {
   await loadThemes()
   await loadOrphansConcepts()
-})
+  // If a theme was selected before the flip, re-fetch its hub view so
+  // the right-hand panel is also consistent with the new mode.
+  if (selectedThemeId.value) {
+    await selectTheme(selectedThemeId.value)
+  }
+}
+
+onMounted(hydrateHub)
+
+// Re-hydrate when live/demo flips.
+watch(appMode, () => { hydrateHub() })
 </script>
 
 <style scoped>
@@ -321,6 +342,7 @@ onMounted(async () => {
 
 .state-card { border: 1px solid #d4dce8; border-radius: 14px; padding: 14px 18px; margin-bottom: 16px; }
 .error-card { border-color: #e2b0a8; background: #fff8f6; color: #c62828; }
+.error-title { font-weight: 700; margin-bottom: 4px; }
 
 .hub-layout { display: grid; grid-template-columns: 280px 1fr; gap: 20px; min-height: 400px; }
 

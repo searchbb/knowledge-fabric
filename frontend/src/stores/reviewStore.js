@@ -6,8 +6,23 @@ import {
   decorateReviewTask,
   matchesReviewFilter,
 } from '../types/review'
-import { getReviewView, putReviewDecision, deleteReviewDecision } from '../services/api/reviewApi'
+// Read through dataClient; writes stay on live API (interceptor-gated in demo).
+import { getReviewView } from '../data/dataClient'
+import { putReviewDecision, deleteReviewDecision } from '../services/api/reviewApi'
 import { buildTaskAssistantPreview } from '../services/review/reviewAssistantPreview'
+import { isDemo } from '../runtime/appMode'
+
+// User-visible message when a write is attempted in demo mode. Surfaces via
+// reviewStore.error so the existing error-card UI catches it without us
+// having to add a new surface. Important: this must NOT look like success —
+// the test plan explicitly forbids "fake success" optimistic updates in demo.
+const DEMO_READONLY_MSG = 'Demo 模式只读：审核动作未真实写入，刷新后会回到 fixture 初始状态。'
+
+function blockIfDemo() {
+  if (!isDemo.value) return false
+  reviewStore.error = DEMO_READONLY_MSG
+  return true
+}
 
 export const reviewStore = reactive({
   items: [],
@@ -120,6 +135,11 @@ export async function applyPrototypeDecision(decisionKey) {
   const index = reviewStore.items.findIndex((item) => item.id === reviewStore.selectedId)
   if (!decision || index === -1) return
 
+  // Demo mode: do NOT optimistically mutate the task — that would look like
+  // success even though the PUT would be silently blocked by the axios
+  // interceptor. Surface a clear read-only message instead.
+  if (blockIfDemo()) return
+
   const task = reviewStore.items[index]
   const nextTask = decorateReviewTask({
     ...task,
@@ -159,12 +179,16 @@ export async function saveReviewNote(itemId) {
   const task = reviewStore.items.find((item) => item.id === itemId)
   if (!task || !reviewStore.projectId) return
 
+  if (blockIfDemo()) return
+
   const status = task.status === 'pending' ? 'questioned' : task.status
   await _persistDecision(itemId, status, task.note || task.manualNote || '')
 }
 
 export async function clearReviewDecision(itemId) {
   if (!reviewStore.projectId) return
+
+  if (blockIfDemo()) return
 
   reviewStore.savingById[itemId] = true
   delete reviewStore.errorById[itemId]
