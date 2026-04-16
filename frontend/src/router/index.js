@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
+import { appMode, APP_MODES } from '../runtime/appMode'
 import Process from '../views/MainView.vue'
 import SimulationView from '../views/SimulationView.vue'
 import SimulationRunView from '../views/SimulationRunView.vue'
@@ -19,7 +20,14 @@ const routes = [
   {
     path: '/',
     name: 'Home',
-    component: Home
+    component: Home,
+    beforeEnter(to, from, next) {
+      if (appMode.value === APP_MODES.DEMO) {
+        next({ path: '/workspace/overview', replace: true })
+      } else {
+        next()
+      }
+    },
   },
   {
     path: '/process/:projectId',
