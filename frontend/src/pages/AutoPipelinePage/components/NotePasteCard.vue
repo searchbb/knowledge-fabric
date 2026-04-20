@@ -13,6 +13,7 @@
         data-test="note-title"
         v-model="title"
         :placeholder="titlePlaceholder"
+        aria-label="笔记标题"
         @input="onTitleTyped"
       />
     </div>
@@ -24,6 +25,9 @@
         data-test="note-editor"
         contenteditable="true"
         spellcheck="false"
+        role="textbox"
+        aria-label="粘贴富文本到这里"
+        aria-multiline="true"
         @paste="onPaste"
       ></div>
       <textarea
@@ -104,35 +108,40 @@ async function onPaste(event) {
   if (!cb) return
   event.preventDefault()
 
-  const html = cb.getData('text/html')
-  const text = cb.getData('text/plain')
-  const files = Array.from(cb.files || []).filter((f) => f.type.startsWith('image/'))
+  try {
+    const html = cb.getData('text/html')
+    const text = cb.getData('text/plain')
+    const files = Array.from(cb.files || []).filter((f) => f.type.startsWith('image/'))
 
-  let md = ''
-  if (html) {
-    md = turndown.turndown(html)
-  } else if (text) {
-    md = text
-  }
+    let md = ''
+    if (html) {
+      md = turndown.turndown(html)
+    } else if (text) {
+      md = text
+    }
 
-  if (files.length) {
-    const imageBlocks = await Promise.all(
-      files.map(async (f) => {
-        const dataUrl = await fileToDataUrl(f)
-        return `![${f.name || 'image'}](${dataUrl})`
-      }),
-    )
-    md = md ? `${md}\n\n${imageBlocks.join('\n\n')}` : imageBlocks.join('\n\n')
-  }
+    if (files.length) {
+      const imageBlocks = await Promise.all(
+        files.map(async (f) => {
+          const dataUrl = await fileToDataUrl(f)
+          return `![${f.name || 'image'}](${dataUrl})`
+        }),
+      )
+      md = md ? `${md}\n\n${imageBlocks.join('\n\n')}` : imageBlocks.join('\n\n')
+    }
 
-  const appended = markdown.value
-    ? `${markdown.value.trimEnd()}\n\n${md}`
-    : md
-  markdown.value = appended
+    const appended = markdown.value
+      ? `${markdown.value.trimEnd()}\n\n${md}`
+      : md
+    markdown.value = appended
 
-  if (!titleTouched.value) {
-    const derived = deriveTitle(md)
-    if (derived) title.value = derived
+    if (!titleTouched.value) {
+      const derived = deriveTitle(md)
+      if (derived) title.value = derived
+    }
+  } catch (e) {
+    resultText.value = `粘贴处理失败：${e?.message || '未知错误'}`
+    resultKind.value = 'err'
   }
 }
 
@@ -140,6 +149,7 @@ async function submit() {
   if (!canSubmit.value) return
   submitting.value = true
   resultText.value = ''
+  resultKind.value = ''
   try {
     const res = await service({
       url: '/api/auto/pending-notes',
@@ -163,7 +173,8 @@ async function submit() {
       resultKind.value = 'warn'
     }
   } catch (e) {
-    resultText.value = `提交失败：${e.message || '未知错误'}`
+    const serverError = e?.response?.data?.error
+    resultText.value = `提交失败：${serverError || e?.message || '未知错误'}`
     resultKind.value = 'err'
   } finally {
     submitting.value = false
