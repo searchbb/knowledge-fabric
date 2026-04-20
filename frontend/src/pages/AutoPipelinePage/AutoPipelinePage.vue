@@ -342,17 +342,18 @@
     </article>
 
     <!-- 10. LLM 抽取模式（配置，沉底） -->
-    <article class="mode-card">
-      <div class="mode-header">
-        <div>
-          <div class="card-title">抽取模式</div>
-          <p class="section-copy mini-copy">
-            切换 Graphiti 抽取走本地 LM Studio 还是百炼（DashScope）在线 API。切换只影响下一个任务,
-            有任务在跑的时候会被拒绝。
-          </p>
-        </div>
-        <div v-if="mode.loading" class="mode-loading">加载中...</div>
-      </div>
+    <CollapsibleCard
+      title="抽取模式"
+      subtitle="切换 Graphiti 抽取走本地 LM Studio 还是百炼（DashScope）在线 API。切换只影响下一个任务, 有任务在跑的时候会被拒绝。"
+      storage-key="auto-pipeline:collapse:llm-mode"
+    >
+      <template #summary-extra>
+        <span class="cc-inline-meta">
+          {{ mode.current === 'bailian' ? '在线 百炼' : '本地 qwen3' }}
+        </span>
+      </template>
+
+      <div v-if="mode.loading" class="mode-loading">加载中...</div>
       <div class="mode-switch-row" v-if="!mode.loading">
         <button
           :class="['mode-btn', mode.current === 'local' ? 'mode-btn-active' : '']"
@@ -383,7 +384,7 @@
         <template v-if="mode.meta.updated_at"> · 最近更新 {{ mode.meta.updated_at }}</template>
         <template v-if="mode.meta.in_flight_count > 0"> · 有 {{ mode.meta.in_flight_count }} 个任务在跑，暂不能切换</template>
       </div>
-    </article>
+    </CollapsibleCard>
 
     <!-- Job detail drawer (P4 step 9, 2026-04-17). Overlay + slide-in
          panel. Opens when a job row is clicked; closes on backdrop click
@@ -524,6 +525,7 @@ import {
 import { appMode } from '../../runtime/appMode'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
+import CollapsibleCard from '../../components/common/CollapsibleCard.vue'
 import NotePasteCard from './components/NotePasteCard.vue'
 
 const crumbs = [
@@ -1809,5 +1811,11 @@ watch(appMode, async () => {
 
 @media (max-width: 900px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.cc-inline-meta {
+  font-size: 12px;
+  color: #6b7280;
+  margin-right: 4px;
 }
 </style>
