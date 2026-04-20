@@ -180,13 +180,19 @@
             <div v-for="item in displayBuckets.in_flight" :key="itemKey(item)" class="bucket-row">
               <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
               <div class="bucket-meta">
-                <template v-if="item.project_id">项目 {{ item.project_id }}</template>
-                <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+                <template v-if="item.claimed_at">已跑 {{ elapsedSince(item.claimed_at) }}</template>
                 <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
-                <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+                <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
               </div>
-              <div v-if="item.phase" class="phase-badge-row">
-                <span class="phase-badge">{{ item.phase }}</span>
+              <div v-if="item.phase || item.last_heartbeat_at" class="phase-badge-row">
+                <span v-if="item.phase" class="phase-badge">{{ item.phase }}</span>
+                <span
+                  v-if="item.last_heartbeat_at"
+                  :class="['heartbeat-chip', heartbeatKind(item.last_heartbeat_at)]"
+                  :title="`last_heartbeat_at: ${item.last_heartbeat_at}`"
+                >
+                  {{ heartbeatLabel(item.last_heartbeat_at) }}
+                </span>
               </div>
               <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
             </div>
@@ -781,6 +787,51 @@ function runDurationLabel(ms) {
   return `${min}m${rem}s`
 }
 
+// Ticks every second so in-flight rows can show a live "已跑 7m30s" label
+// and "3 秒前心跳" freshness indicator without waiting for the 6s queue
+// poll.
+const nowTick = ref(Date.now())
+let nowTimer = null
+
+function ageSeconds(isoString) {
+  if (!isoString) return null
+  const t = Date.parse(isoString)
+  if (Number.isNaN(t)) return null
+  return Math.max(0, Math.floor((nowTick.value - t) / 1000))
+}
+
+function humanSecs(sec) {
+  if (sec == null) return ''
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  const rem = sec % 60
+  return rem ? `${min}m${rem}s` : `${min}m`
+}
+
+function elapsedSince(isoString) {
+  const s = ageSeconds(isoString)
+  return s == null ? '' : humanSecs(s)
+}
+
+function heartbeatLabel(isoString) {
+  const s = ageSeconds(isoString)
+  if (s == null) return ''
+  if (s < 60) return `${s} 秒前心跳`
+  const min = Math.floor(s / 60)
+  return `${min} 分钟前心跳`
+}
+
+function heartbeatKind(isoString) {
+  const s = ageSeconds(isoString)
+  if (s == null) return ''
+  // Backend's drain orchestrator kills a task whose heartbeat has been
+  // silent for >4 min. Reflect that threshold in the UI color so the
+  // user can see "still alive" vs "about to be cancelled" at a glance.
+  if (s > 240) return 'heartbeat-chip--stale'
+  if (s > 60) return 'heartbeat-chip--slow'
+  return 'heartbeat-chip--fresh'
+}
+
 async function loadQueue() {
   loading.value = true
   error.value = ''
@@ -1048,6 +1099,10 @@ function stopPoll() {
 
 onUnmounted(() => {
   stopPoll()
+  if (nowTimer) {
+    clearInterval(nowTimer)
+    nowTimer = null
+  }
   window.removeEventListener('keyup', handleDrawerEsc)
 })
 
@@ -1340,6 +1395,9 @@ onMounted(async () => {
   await loadMode()
   await refreshDiscover()
   startPoll()
+  // Tick every second so the in-flight "已跑" / "N 秒前心跳" labels stay
+  // live between queue polls (which run every 6s).
+  nowTimer = setInterval(() => { nowTick.value = Date.now() }, 1000)
   window.addEventListener('keyup', handleDrawerEsc)
 })
 
@@ -1846,7 +1904,13 @@ watch(appMode, async () => {
 .retry-note.ok { color: #2e7d32; }
 .retry-note.warn { color: #e65100; }
 .retry-note.err { color: #c62828; }
-.phase-badge-row { margin-top: 5px; }
+.phase-badge-row {
+  margin-top: 5px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
 .phase-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -1858,6 +1922,50 @@ watch(appMode, async () => {
   color: #3730a3;
   border: 1px solid #c7d2fe;
   letter-spacing: 0.03em;
+}
+/* Heartbeat freshness chip for in-flight rows. Fresh (<1 min) = green
+   pulse, slow (1-4 min) = amber, stale (>4 min) = red; the backend's
+   drain orchestrator kills anything whose heartbeat has been silent for
+   more than 4 min, so red means "about to be cancelled." */
+.heartbeat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.heartbeat-chip::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.heartbeat-chip--fresh {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+.heartbeat-chip--fresh::before {
+  animation: heartbeat-pulse 1.6s ease-in-out infinite;
+}
+.heartbeat-chip--slow {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fde68a;
+}
+.heartbeat-chip--stale {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+@keyframes heartbeat-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 .empty-note { color: #7a8090; font-size: 13px; padding: 8px 0; }
 
