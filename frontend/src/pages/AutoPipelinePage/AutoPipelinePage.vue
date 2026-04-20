@@ -1332,10 +1332,9 @@ watch(appMode, async () => {
 .mini-copy { font-size: 13px; margin: 6px 0 12px; }
 
 .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.summary-grid .card { padding: 12px 14px; }
+.summary-grid .metric-value { font-size: 24px; }
 
-.discover-card { margin-bottom: 20px; }
-.discover-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
-.discover-total { color: #5a6573; font-size: 12px; }
 .discover-counts {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -1681,7 +1680,12 @@ watch(appMode, async () => {
   gap: 12px;
   margin-bottom: 10px;
 }
-.bucket-header .card-title { margin-bottom: 0; }
+.bucket-header .card-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #111827;
+  margin-bottom: 0;
+}
 .bucket-header-actions {
   display: flex;
   gap: 8px;
@@ -1769,22 +1773,7 @@ watch(appMode, async () => {
 }
 .empty-note { color: #7a8090; font-size: 13px; padding: 8px 0; }
 
-.nav-row { margin-top: 24px; display: flex; gap: 12px; }
-
 /* LLM 抽取模式切换卡片 */
-.mode-card {
-  border: 1px solid #d4dce8;
-  background: linear-gradient(180deg, #fffbf0 0%, #fff3d6 100%);
-  border-radius: 18px;
-  padding: 18px;
-  margin-bottom: 16px;
-}
-.mode-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
 .mode-loading { font-size: 12px; color: #997200; }
 .mode-switch-row {
   display: grid;
