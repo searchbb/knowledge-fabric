@@ -139,13 +139,16 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const card = wrapper.find('.discover-card')
-    expect(card.exists()).toBe(true)
-    expect(card.text()).toContain('共 4 条')
+    // Discover content now lives inside <CollapsibleCard>. We forward
+    // `data-test="discover-card"` onto its <details> root so tests can
+    // scope assertions to this card only.
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    expect(discoverCard.exists()).toBe(true)
+    expect(discoverCard.text()).toContain('共 4 条')
 
     // Each dc-metric row is "<label><value>" — we want explicit
     // label/value pairing so a silent zero on a wrong key fails.
-    const pairs = card.findAll('.dc-metric').map((row) => ({
+    const pairs = discoverCard.findAll('.dc-metric').map((row) => ({
       label: row.find('.dc-label').text(),
       value: row.find('.dc-value').text(),
     }))
@@ -176,11 +179,11 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const card = wrapper.find('.discover-card')
-    expect(card.text()).toContain('共 7 条')
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    expect(discoverCard.text()).toContain('共 7 条')
     // Spot-check the specific counter so a wrong by_status key path
     // (e.g. reading res.data.data.by_status) would miss the 7.
-    const running = card
+    const running = discoverCard
       .findAll('.dc-metric')
       .find((r) => r.find('.dc-label').text() === '运行中')
     expect(running.find('.dc-value').text()).toBe('7')
@@ -202,8 +205,7 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const card = wrapper.find('.discover-card')
-    expect(card.text()).toContain('共 0 条')
+    expect(wrapper.find('[data-test="discover-card"]').text()).toContain('共 0 条')
     // Rest of the page still renders (URL queue, mode card, etc.).
     expect(wrapper.text()).toContain('live.example.com/a')
   })
@@ -238,11 +240,15 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    // The button is only enabled when pending > 0.
-    const runBtn = wrapper
-      .find('.discover-card')
+    // The body-level "手动运行一条" button was removed to avoid
+    // duplicating the always-visible summary button; drive the flow
+    // through the summary-extra "运行一条" button instead. Scope to the
+    // Discover card so an unrelated button with the same text can't be
+    // picked up accidentally.
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    const runBtn = discoverCard
       .findAll('button')
-      .find((b) => b.text().includes('手动运行一条'))
+      .find((b) => b.text().includes('运行一条'))
     expect(runBtn).toBeTruthy()
     expect(runBtn.attributes('disabled')).toBeUndefined()
 
@@ -258,10 +264,9 @@ describe('AutoPipelinePage', () => {
     expect(postCall).toBeTruthy()
 
     // Outcome surfaced in the UI.
-    const card = wrapper.find('.discover-card')
-    expect(card.text()).toContain('djob_abc123')
-    expect(card.text()).toContain('completed')
-    expect(card.text()).toContain('5')
+    expect(discoverCard.text()).toContain('djob_abc123')
+    expect(discoverCard.text()).toContain('completed')
+    expect(discoverCard.text()).toContain('5')
   })
 
   it('run-once on empty queue reports "队列为空" without surfacing an error', async () => {
@@ -285,14 +290,14 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const runBtn = wrapper
-      .find('.discover-card')
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    const runBtn = discoverCard
       .findAll('button')
-      .find((b) => b.text().includes('手动运行一条'))
+      .find((b) => b.text().includes('运行一条'))
     await runBtn.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.discover-card').text()).toContain('队列为空')
+    expect(discoverCard.text()).toContain('队列为空')
   })
 
   // ---------------------------------------------------------------------
@@ -478,7 +483,7 @@ describe('AutoPipelinePage', () => {
     expect(refetchAfter.length).toBeGreaterThanOrEqual(2)
 
     // UI surfaces a success note.
-    expect(wrapper.find('.discover-card').text()).toContain('已重新入队')
+    expect(wrapper.text()).toContain('已重新入队')
   })
 
   it('clicking cancel on a pending job POSTs to /cancel', async () => {
@@ -523,7 +528,10 @@ describe('AutoPipelinePage', () => {
         c.url === '/api/auto/discover-jobs/djob_cancel_me/cancel',
     )
     expect(postCall).toBeTruthy()
-    expect(wrapper.find('.discover-card').text()).toContain('已取消')
+    // Scope to the Discover card: "已取消" also appears in the errored
+    // bucket when a cancelled URL is surfaced, so a whole-wrapper match
+    // would collide.
+    expect(wrapper.find('[data-test="discover-card"]').text()).toContain('已取消')
   })
 
   it('retry failure surfaces a readable error without crashing the panel', async () => {
@@ -558,7 +566,10 @@ describe('AutoPipelinePage', () => {
     await retryBtn.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.discover-card').text()).toContain('重试失败')
+    // Scope to the Discover card: the errored URL bucket has its own
+    // "一键重试" header action and per-row retry notes, so the raw
+    // string could collide on the whole wrapper.
+    expect(wrapper.find('[data-test="discover-card"]').text()).toContain('重试失败')
   })
 
   // ---------------------------------------------------------------------
@@ -793,5 +804,132 @@ describe('AutoPipelinePage', () => {
     expect(wrapper.text()).toContain('live.example.com')
     // Three read endpoints re-hit on return.
     expect(serviceMock.mock.calls.length).toBeGreaterThan(liveHits)
+  })
+
+  it('auto-expands the errored bucket when there are errored items', async () => {
+    // The errored bucket wraps in a CollapsibleCard with
+    // `force-open="displayBuckets.errored.length > 0"`. On mount with
+    // errored items present and no localStorage entry, the card should
+    // start in the open state so the user sees the failure immediately.
+    const router = makeMockRouter({
+      'get /api/auto/pending-urls': {
+        data: {
+          pending: [],
+          in_flight: [],
+          processed: [],
+          errored: [
+            { url_fingerprint: 'x', url: 'https://err', finished_at: '2026-04-20T00:00:00', error: 'boom' },
+          ],
+        },
+      },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    const errored = wrapper.find('[data-test="bucket-errored"]')
+    expect(errored.exists()).toBe(true)
+    expect(errored.element.open).toBe(true)
+  })
+
+  it('sorts all four buckets newest-first', async () => {
+    const router = makeMockRouter({
+      'get /api/auto/pending-urls': {
+        data: {
+          pending: [
+            { url_fingerprint: 'a', url: 'https://old.example/a', created_at: '2026-04-10T00:00:00' },
+            { url_fingerprint: 'b', url: 'https://new.example/b', created_at: '2026-04-18T00:00:00' },
+          ],
+          in_flight: [
+            { url_fingerprint: 'c', url: 'https://c', claimed_at: '2026-04-19T00:00:00' },
+            { url_fingerprint: 'd', url: 'https://d', claimed_at: '2026-04-20T00:00:00' },
+          ],
+          processed: [
+            { url_fingerprint: 'e', url: 'https://e', finished_at: '2026-04-15T00:00:00' },
+            { url_fingerprint: 'f', url: 'https://f', finished_at: '2026-04-20T00:00:00' },
+          ],
+          errored: [
+            { url_fingerprint: 'g', url: 'https://err-old', finished_at: '2026-04-10T00:00:00', error: 'x' },
+            { url_fingerprint: 'h', url: 'https://err-new', finished_at: '2026-04-20T00:00:00', error: 'y' },
+          ],
+        },
+      },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    // Task 6 (2026-04-20): 待处理 stays as <article class="bucket-card">
+    // (primary actionable queue); the other three are wrapped in
+    // <CollapsibleCard> and scoped via `data-test`.
+    const pending = wrapper.find('.bucket-card .bucket-list')
+    const errored = wrapper.find('[data-test="bucket-errored"] .bucket-list')
+    const inFlight = wrapper.find('[data-test="bucket-in-flight"] .bucket-list')
+    const processed = wrapper.find('[data-test="bucket-processed"] .bucket-list')
+    expect(pending.text()).toMatch(/new\.example\/b[\s\S]*old\.example\/a/)
+    expect(errored.text()).toMatch(/err-new[\s\S]*err-old/)
+    expect(inFlight.text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
+    expect(processed.text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
+  })
+
+  it('shows "读取失败" in LLM summary when mode load fails; does not duplicate global error', async () => {
+    // Both queue + mode endpoints fail (backend down). The top-level
+    // error banner is the single source of truth; the LLM card must
+    // only show a compact "读取失败" hint, not re-quote the verbose
+    // backend-down copy.
+    const router = makeMockRouter({
+      'get /api/auto/pending-urls': () => { throw new Error('后端未连接：无法加载数据') },
+      'get /api/config/llm-mode': () => { throw new Error('后端未连接：无法加载数据') },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    // Global banner is set by loadQueue failure.
+    expect(wrapper.find('.error-card').exists()).toBe(true)
+    expect(wrapper.find('.error-card').text()).toContain('后端未连接')
+
+    // LLM summary-extra shows the compact warn indicator.
+    expect(wrapper.find('.cc-inline-meta--warn').text()).toBe('读取失败')
+
+    // Verbose "读取当前模式失败" must NOT appear anywhere (no duplication).
+    expect(wrapper.text()).not.toContain('读取当前模式失败')
+  })
+
+  it('shows verbose mode error inside LLM card when only mode endpoint fails', async () => {
+    // Queue loads fine, but the mode endpoint specifically errors out.
+    // The global banner stays silent; the LLM card surfaces the detail.
+    const router = makeMockRouter({
+      'get /api/config/llm-mode': () => { throw new Error('mode endpoint 500') },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    // No global banner (queue was fine).
+    expect(wrapper.find('.error-card').exists()).toBe(false)
+
+    // Summary-extra signals the failure.
+    expect(wrapper.find('.cc-inline-meta--warn').text()).toBe('读取失败')
+
+    // Body retains the detailed message (visible when user expands).
+    expect(wrapper.text()).toContain('读取当前模式失败')
+    expect(wrapper.text()).toContain('mode endpoint 500')
   })
 })
