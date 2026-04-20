@@ -139,13 +139,16 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const card = wrapper.find('.discover-card')
-    expect(card.exists()).toBe(true)
-    expect(card.text()).toContain('共 4 条')
+    // Discover content now lives inside <CollapsibleCard>. We forward
+    // `data-test="discover-card"` onto its <details> root so tests can
+    // scope assertions to this card only.
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    expect(discoverCard.exists()).toBe(true)
+    expect(discoverCard.text()).toContain('共 4 条')
 
     // Each dc-metric row is "<label><value>" — we want explicit
     // label/value pairing so a silent zero on a wrong key fails.
-    const pairs = card.findAll('.dc-metric').map((row) => ({
+    const pairs = discoverCard.findAll('.dc-metric').map((row) => ({
       label: row.find('.dc-label').text(),
       value: row.find('.dc-value').text(),
     }))
@@ -176,11 +179,11 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const card = wrapper.find('.discover-card')
-    expect(card.text()).toContain('共 7 条')
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    expect(discoverCard.text()).toContain('共 7 条')
     // Spot-check the specific counter so a wrong by_status key path
     // (e.g. reading res.data.data.by_status) would miss the 7.
-    const running = card
+    const running = discoverCard
       .findAll('.dc-metric')
       .find((r) => r.find('.dc-label').text() === '运行中')
     expect(running.find('.dc-value').text()).toBe('7')
@@ -202,8 +205,7 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const card = wrapper.find('.discover-card')
-    expect(card.text()).toContain('共 0 条')
+    expect(wrapper.find('[data-test="discover-card"]').text()).toContain('共 0 条')
     // Rest of the page still renders (URL queue, mode card, etc.).
     expect(wrapper.text()).toContain('live.example.com/a')
   })
@@ -238,11 +240,15 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    // The button is only enabled when pending > 0.
-    const runBtn = wrapper
-      .find('.discover-card')
+    // The body-level "手动运行一条" button was removed to avoid
+    // duplicating the always-visible summary button; drive the flow
+    // through the summary-extra "运行一条" button instead. Scope to the
+    // Discover card so an unrelated button with the same text can't be
+    // picked up accidentally.
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    const runBtn = discoverCard
       .findAll('button')
-      .find((b) => b.text().includes('手动运行一条'))
+      .find((b) => b.text().includes('运行一条'))
     expect(runBtn).toBeTruthy()
     expect(runBtn.attributes('disabled')).toBeUndefined()
 
@@ -258,10 +264,9 @@ describe('AutoPipelinePage', () => {
     expect(postCall).toBeTruthy()
 
     // Outcome surfaced in the UI.
-    const card = wrapper.find('.discover-card')
-    expect(card.text()).toContain('djob_abc123')
-    expect(card.text()).toContain('completed')
-    expect(card.text()).toContain('5')
+    expect(discoverCard.text()).toContain('djob_abc123')
+    expect(discoverCard.text()).toContain('completed')
+    expect(discoverCard.text()).toContain('5')
   })
 
   it('run-once on empty queue reports "队列为空" without surfacing an error', async () => {
@@ -285,14 +290,14 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const runBtn = wrapper
-      .find('.discover-card')
+    const discoverCard = wrapper.find('[data-test="discover-card"]')
+    const runBtn = discoverCard
       .findAll('button')
-      .find((b) => b.text().includes('手动运行一条'))
+      .find((b) => b.text().includes('运行一条'))
     await runBtn.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.discover-card').text()).toContain('队列为空')
+    expect(discoverCard.text()).toContain('队列为空')
   })
 
   // ---------------------------------------------------------------------
@@ -478,7 +483,7 @@ describe('AutoPipelinePage', () => {
     expect(refetchAfter.length).toBeGreaterThanOrEqual(2)
 
     // UI surfaces a success note.
-    expect(wrapper.find('.discover-card').text()).toContain('已重新入队')
+    expect(wrapper.text()).toContain('已重新入队')
   })
 
   it('clicking cancel on a pending job POSTs to /cancel', async () => {
@@ -523,7 +528,10 @@ describe('AutoPipelinePage', () => {
         c.url === '/api/auto/discover-jobs/djob_cancel_me/cancel',
     )
     expect(postCall).toBeTruthy()
-    expect(wrapper.find('.discover-card').text()).toContain('已取消')
+    // Scope to the Discover card: "已取消" also appears in the errored
+    // bucket when a cancelled URL is surfaced, so a whole-wrapper match
+    // would collide.
+    expect(wrapper.find('[data-test="discover-card"]').text()).toContain('已取消')
   })
 
   it('retry failure surfaces a readable error without crashing the panel', async () => {
@@ -558,7 +566,10 @@ describe('AutoPipelinePage', () => {
     await retryBtn.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.discover-card').text()).toContain('重试失败')
+    // Scope to the Discover card: the errored URL bucket has its own
+    // "一键重试失败" header action and per-row retry notes, so the raw
+    // string could collide on the whole wrapper.
+    expect(wrapper.find('[data-test="discover-card"]').text()).toContain('重试失败')
   })
 
   // ---------------------------------------------------------------------

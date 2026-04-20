@@ -160,15 +160,32 @@
       </div>
     </article>
 
-    <!-- 6. Discover queue card (will be wrapped in CollapsibleCard in a later task) -->
-    <article class="card discover-card">
-      <div class="discover-head">
-        <div class="card-title">Discover 队列 · 跨文章关系发现</div>
-        <span class="discover-total">共 {{ discoverStats.total }} 条</span>
-      </div>
-      <p class="section-copy mini-copy">
-        文章主流程不再等这一步。每篇新文章会在这里落一条待办，后台或手动运行去兑现它。
-      </p>
+    <!-- 6. Discover queue — counts + manual run stay visible; attention
+         jobs list + cooldown alert collapse into the body. -->
+    <CollapsibleCard
+      title="Discover 队列 · 跨文章关系发现"
+      subtitle="文章主流程不再等这一步。每篇新文章会在这里落一条待办，后台或手动运行去兑现它。"
+      :badge="`共 ${discoverStats.total} 条`"
+      storage-key="auto-pipeline:collapse:discover"
+      data-test="discover-card"
+    >
+      <template #summary-extra>
+        <span class="dc-inline-counts">
+          <span class="dc-inline-chip">待 {{ discoverStats.by_status.pending || 0 }}</span>
+          <span class="dc-inline-chip">跑 {{ discoverStats.by_status.running || 0 }}</span>
+          <span v-if="(discoverStats.by_status.failed || 0) > 0" class="dc-inline-chip dc-inline-chip--warn">
+            失 {{ discoverStats.by_status.failed || 0 }}
+          </span>
+          <button
+            class="btn-tiny"
+            :disabled="discoverRunning || (discoverStats.by_status.pending || 0) === 0"
+            @click.stop.prevent="runOneDiscover"
+          >
+            {{ discoverRunning ? '运行中...' : '运行一条' }}
+          </button>
+        </span>
+      </template>
+
       <div class="discover-counts">
         <div class="dc-metric"><span class="dc-label">待办</span><span class="dc-value">{{ discoverStats.by_status.pending || 0 }}</span></div>
         <div class="dc-metric"><span class="dc-label">运行中</span><span class="dc-value">{{ discoverStats.by_status.running || 0 }}</span></div>
@@ -177,13 +194,6 @@
         <div class="dc-metric"><span class="dc-label">失败</span><span class="dc-value dc-value--warn">{{ discoverStats.by_status.failed || 0 }}</span></div>
       </div>
       <div class="action-row discover-actions">
-        <button
-          class="btn-small"
-          :disabled="discoverRunning || (discoverStats.by_status.pending || 0) === 0"
-          @click="runOneDiscover"
-        >
-          {{ discoverRunning ? '运行中...' : '手动运行一条' }}
-        </button>
         <button class="btn-small" :disabled="discoverRunning" @click="refreshDiscover">刷新</button>
         <span v-if="discoverLastResult" :class="['retry-note', discoverLastResult.kind]">
           {{ discoverLastResult.text }}
@@ -252,7 +262,7 @@
           </button>
         </div>
       </div>
-    </article>
+    </CollapsibleCard>
 
     <!-- 7. 失败 bucket -->
     <article class="bucket-card">
@@ -1817,5 +1827,21 @@ watch(appMode, async () => {
   font-size: 12px;
   color: #6b7280;
   margin-right: 4px;
+}
+.dc-inline-counts {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.dc-inline-chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #374151;
+}
+.dc-inline-chip--warn {
+  background: #fee2e2;
+  color: #991b1b;
 }
 </style>
