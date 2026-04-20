@@ -9,6 +9,10 @@ GET /api/workspace/projects/<pid>/article/raw
    (这不是 vault fallback,而是对旧格式 project.json 的兼容读取)
 3. 若路径不存在或读取失败,返回明确错误码,前端会原样展示给用户
 
+外部图片: 前端渲染层给所有 <img> 加 referrerpolicy="no-referrer",
+这让 mmbiz / zhimg 等国内图床的 Referer 防盗链失效,图片能正常加载。
+所以后端不再做 mmbiz 探测或下发 image_policy 警告 banner。
+
 错误码:
 - PROJECT_NOT_FOUND: project_id 不存在
 - NO_SOURCE_FILE: 项目没有任何源 md 文件
@@ -91,9 +95,6 @@ def get_article_raw(project_id: str):
             "source_md_path": md_path,
         }), 500
 
-    # 外部图床(微信图床等)可能存在防盗链,前端应提前提示用户
-    has_wechat_img = 'mmbiz.qpic.cn' in content or 'mmbiz.qlogo.cn' in content
-
     return jsonify({
         "success": True,
         "project_id": project_id,
@@ -103,11 +104,4 @@ def get_article_raw(project_id: str):
         "source_backend": source_backend,
         "source_md_path": md_path,
         "vault_relative_dir": vault_relative_dir,
-        "image_policy": {
-            "mode": "external" if has_wechat_img else "none",
-            "may_fail": has_wechat_img,
-            "message": "原文包含微信外链图片,可能因防盗链无法加载(不影响文字)"
-            if has_wechat_img
-            else "",
-        },
     })

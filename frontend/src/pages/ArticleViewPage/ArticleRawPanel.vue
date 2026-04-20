@@ -1,6 +1,5 @@
 <template>
   <div class="article-raw-wrap">
-    <!-- 元信息 + 外链图片风险提示 banner -->
     <header v-if="data" class="raw-meta">
       <div class="meta-line">
         <span class="meta-chip">📄 {{ data.filename }}</span>
@@ -12,9 +11,6 @@
         <button class="reload-btn" @click="load" :disabled="loading" title="重新拉取原文">
           {{ loading ? '加载中...' : '⟳ 刷新' }}
         </button>
-      </div>
-      <div v-if="data.image_policy?.may_fail" class="image-warning">
-        ⚠ {{ data.image_policy.message }}
       </div>
     </header>
 
@@ -104,10 +100,20 @@ const safeHtml = computed(() => {
   const rawHtml = md.render(data.value.content)
   const clean = DOMPurify.sanitize(rawHtml, sanitizeConfig)
   // 给所有外链 a 加 target="_blank" rel="noopener noreferrer"(sanitize 后二次加工)
-  return clean.replace(
+  const withAnchors = clean.replace(
     /<a\s+([^>]*?)href="(https?:[^"]+)"([^>]*)>/gi,
     (m, pre, href, post) =>
       `<a ${pre}href="${href}" target="_blank" rel="noopener noreferrer"${post}>`
+  )
+  // 给所有 <img> 加 referrerpolicy="no-referrer"。微信 mmbiz.qpic.cn 等 CDN
+  // 会按 Referer 做防盗链(Obsidian 桌面端不带 Referer 所以放行,浏览器带
+  // 就被 403)。不发 Referer 就能让大多数国内图床在 localhost 渲染。
+  return withAnchors.replace(
+    /<img\b([^>]*)>/gi,
+    (m, attrs) =>
+      /\breferrerpolicy\s*=/i.test(attrs)
+        ? m
+        : `<img${attrs} referrerpolicy="no-referrer">`,
   )
 })
 
@@ -206,16 +212,6 @@ watch(() => props.projectId, load)
   cursor: pointer;
 }
 .reload-btn:disabled { opacity: 0.6; cursor: wait; }
-
-/* 图像警告属于语义警告态,跨主题保持识别度 */
-.image-warning {
-  padding: 8px 12px;
-  font-size: 12px;
-  color: #8a5a00;
-  background: #fffbe6;
-  border-left: 3px solid #f0b500;
-  border-radius: 4px;
-}
 
 .view-switch {
   display: flex;
