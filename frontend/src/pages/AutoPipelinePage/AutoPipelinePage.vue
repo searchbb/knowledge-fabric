@@ -387,7 +387,12 @@
       storage-key="auto-pipeline:collapse:llm-mode"
     >
       <template #summary-extra>
-        <span class="cc-inline-meta">
+        <span
+          v-if="mode.loadFailed"
+          class="cc-inline-meta cc-inline-meta--warn"
+          title="无法读取当前模式状态（见顶部错误提示）"
+        >读取失败</span>
+        <span v-else class="cc-inline-meta">
           {{ mode.current === 'bailian' ? '在线 百炼' : '本地 qwen3' }}
         </span>
       </template>
@@ -665,6 +670,7 @@ const mode = ref({
   meta: {},
   message: '',
   messageKind: '',
+  loadFailed: false,
 })
 // Gap #11 fix: latest backend task snapshot for the in-flight URL so we
 // can show real-time build progress while the drain is running.
@@ -1241,11 +1247,22 @@ async function loadMode() {
     mode.value.current = d.mode || 'local'
     mode.value.meta = d
     mode.value.loading = false
+    mode.value.loadFailed = false
+    // A successful load clears any stale error message from a prior
+    // failed attempt (e.g. backend was down, then came back up).
+    if (mode.value.messageKind === 'err') {
+      mode.value.message = ''
+      mode.value.messageKind = ''
+    }
   } catch (e) {
     mode.value.loading = false
+    mode.value.loadFailed = true
     // Don't clobber a recent switch-success toast with a background poll
-    // error. Only surface if we have no prior state.
-    if (firstLoad) {
+    // error. Only surface if we have no prior state. And if the global
+    // error banner is already yelling about "backend not connected",
+    // don't duplicate the same message inside this card — the compact
+    // "读取失败" indicator in the summary-extra covers it.
+    if (firstLoad && !error.value) {
       mode.value.message = `读取当前模式失败：${e.message || e}`
       mode.value.messageKind = 'err'
     }
@@ -1267,6 +1284,7 @@ async function switchMode(target) {
     const d = res.data || {}
     mode.value.current = d.mode || target
     mode.value.meta = d
+    mode.value.loadFailed = false
     mode.value.message =
       target === 'bailian'
         ? `已切换到在线 百炼（${d.bailian_model || 'qwen3.5-plus'}，并发 ${d.bailian_semaphore ?? '?'}）。下一个任务生效。`
@@ -1857,6 +1875,10 @@ watch(appMode, async () => {
   font-size: 12px;
   color: #6b7280;
   margin-right: 4px;
+}
+.cc-inline-meta--warn {
+  color: #b45309;
+  font-weight: 600;
 }
 .dc-inline-counts {
   display: inline-flex;

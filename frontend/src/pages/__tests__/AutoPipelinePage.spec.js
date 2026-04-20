@@ -879,4 +879,57 @@ describe('AutoPipelinePage', () => {
     expect(inFlight.text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
     expect(processed.text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
   })
+
+  it('shows "读取失败" in LLM summary when mode load fails; does not duplicate global error', async () => {
+    // Both queue + mode endpoints fail (backend down). The top-level
+    // error banner is the single source of truth; the LLM card must
+    // only show a compact "读取失败" hint, not re-quote the verbose
+    // backend-down copy.
+    const router = makeMockRouter({
+      'get /api/auto/pending-urls': () => { throw new Error('后端未连接：无法加载数据') },
+      'get /api/config/llm-mode': () => { throw new Error('后端未连接：无法加载数据') },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    // Global banner is set by loadQueue failure.
+    expect(wrapper.find('.error-card').exists()).toBe(true)
+    expect(wrapper.find('.error-card').text()).toContain('后端未连接')
+
+    // LLM summary-extra shows the compact warn indicator.
+    expect(wrapper.find('.cc-inline-meta--warn').text()).toBe('读取失败')
+
+    // Verbose "读取当前模式失败" must NOT appear anywhere (no duplication).
+    expect(wrapper.text()).not.toContain('读取当前模式失败')
+  })
+
+  it('shows verbose mode error inside LLM card when only mode endpoint fails', async () => {
+    // Queue loads fine, but the mode endpoint specifically errors out.
+    // The global banner stays silent; the LLM card surfaces the detail.
+    const router = makeMockRouter({
+      'get /api/config/llm-mode': () => { throw new Error('mode endpoint 500') },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    // No global banner (queue was fine).
+    expect(wrapper.find('.error-card').exists()).toBe(false)
+
+    // Summary-extra signals the failure.
+    expect(wrapper.find('.cc-inline-meta--warn').text()).toBe('读取失败')
+
+    // Body retains the detailed message (visible when user expands).
+    expect(wrapper.text()).toContain('读取当前模式失败')
+    expect(wrapper.text()).toContain('mode endpoint 500')
+  })
 })
