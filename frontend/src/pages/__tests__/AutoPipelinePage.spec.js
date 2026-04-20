@@ -84,6 +84,17 @@ describe('AutoPipelinePage', () => {
     expect(wrapper.text()).toContain('live.example.com/a')
   })
 
+  it('renders NotePasteCard below the URL input', async () => {
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+    // Exercises mounting of the paste-entry card on the same page.
+    expect(wrapper.find('[data-test="note-editor"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="note-title"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="note-submit"]').exists()).toBe(true)
+  })
+
   it('demo mode loads real demo fixture without calling live service', async () => {
     setMode('demo')
     const wrapper = mount(AutoPipelinePage, {

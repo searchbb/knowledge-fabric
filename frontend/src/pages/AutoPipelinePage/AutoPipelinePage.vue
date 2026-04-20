@@ -345,6 +345,11 @@
       <div v-if="addResult" :class="['add-result', addResult.kind]">{{ addResult.text }}</div>
     </article>
 
+    <!-- Rich-text paste entry (2026-04-20): paste from WeChat / Twitter /
+         Feishu / clipboard → Turndown → MD → /api/auto/pending-notes →
+         same drain path as URL articles. -->
+    <NotePasteCard @submitted="loadQueue" />
+
     <!-- Run button -->
     <article class="action-card">
       <div class="card-title">运行待处理</div>
@@ -519,6 +524,7 @@ import {
 import { appMode } from '../../runtime/appMode'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
+import NotePasteCard from './components/NotePasteCard.vue'
 
 const crumbs = [
   { label: '跨项目', to: '/workspace/registry' },
