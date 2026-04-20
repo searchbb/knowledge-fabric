@@ -80,3 +80,5 @@ backend/app/archive/
 frontend/src/archive/
 # Graphiti smoke scripts are developer-local throwaways.
 backend/scripts/test_graphiti_*.py
+# Local git worktrees — each subdir is a full checkout.
+.worktrees/
