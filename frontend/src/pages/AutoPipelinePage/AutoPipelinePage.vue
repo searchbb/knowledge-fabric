@@ -652,22 +652,28 @@ const bucketPanels = [
   { key: 'errored', title: '失败', emptyText: '还没有失败记录。' },
 ]
 
-// Sorted view of the four buckets. Only `processed` is reordered: newest
-// `finished_at` first so the latest success sits at the top. Other
-// buckets keep the backend's natural order (pending = FIFO, in_flight =
-// claim order, errored = failure chronology — which is useful when
-// reading the error messages in context). `.slice()` preserves the
-// original array reactivity without mutating it.
-const displayBuckets = computed(() => ({
-  pending: buckets.value.pending,
-  in_flight: buckets.value.in_flight,
-  processed: buckets.value.processed.slice().sort((a, b) => {
-    const keyA = a.finished_at || a.claimed_at || a.created_at || ''
-    const keyB = b.finished_at || b.claimed_at || b.created_at || ''
-    return keyB.localeCompare(keyA)
-  }),
-  errored: buckets.value.errored,
-}))
+// Sorted view of the four buckets — always newest-first, so the user
+// can scan the top of any list to see the most recent activity. Each
+// bucket picks the field that best represents "when did this state
+// happen":
+//   - pending   → created_at  (when it was queued)
+//   - in_flight → claimed_at (when drain picked it up), fallback created_at
+//   - processed → finished_at, fallback claimed_at / created_at
+//   - errored   → finished_at (error time), fallback claimed_at / created_at
+// ISO8601 strings sort lexicographically via localeCompare.
+const displayBuckets = computed(() => {
+  const byNewest = (pick) => (a, b) => {
+    const ka = pick(a) || ''
+    const kb = pick(b) || ''
+    return kb.localeCompare(ka)
+  }
+  return {
+    pending: buckets.value.pending.slice().sort(byNewest((i) => i.created_at)),
+    in_flight: buckets.value.in_flight.slice().sort(byNewest((i) => i.claimed_at || i.created_at)),
+    processed: buckets.value.processed.slice().sort(byNewest((i) => i.finished_at || i.claimed_at || i.created_at)),
+    errored: buckets.value.errored.slice().sort(byNewest((i) => i.finished_at || i.claimed_at || i.created_at)),
+  }
+})
 
 // Gap #11 fix: derive drain-active state from the queue itself, not
 // from this tab's local `running` boolean. The live-progress panel

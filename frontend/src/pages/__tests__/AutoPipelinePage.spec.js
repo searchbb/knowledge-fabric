@@ -794,4 +794,44 @@ describe('AutoPipelinePage', () => {
     // Three read endpoints re-hit on return.
     expect(serviceMock.mock.calls.length).toBeGreaterThan(liveHits)
   })
+
+  it('sorts all four buckets newest-first', async () => {
+    const router = makeMockRouter({
+      'get /api/auto/pending-urls': {
+        data: {
+          pending: [
+            { url_fingerprint: 'a', url: 'https://old.example/a', created_at: '2026-04-10T00:00:00' },
+            { url_fingerprint: 'b', url: 'https://new.example/b', created_at: '2026-04-18T00:00:00' },
+          ],
+          in_flight: [
+            { url_fingerprint: 'c', url: 'https://c', claimed_at: '2026-04-19T00:00:00' },
+            { url_fingerprint: 'd', url: 'https://d', claimed_at: '2026-04-20T00:00:00' },
+          ],
+          processed: [
+            { url_fingerprint: 'e', url: 'https://e', finished_at: '2026-04-15T00:00:00' },
+            { url_fingerprint: 'f', url: 'https://f', finished_at: '2026-04-20T00:00:00' },
+          ],
+          errored: [
+            { url_fingerprint: 'g', url: 'https://err-old', finished_at: '2026-04-10T00:00:00', error: 'x' },
+            { url_fingerprint: 'h', url: 'https://err-new', finished_at: '2026-04-20T00:00:00', error: 'y' },
+          ],
+        },
+      },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    const bucketLists = wrapper.findAll('.bucket-card .bucket-list')
+    expect(bucketLists).toHaveLength(4)
+    // bucketPanels order: pending, in_flight, processed, errored
+    expect(bucketLists[0].text()).toMatch(/new\.example\/b[\s\S]*old\.example\/a/)
+    expect(bucketLists[1].text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
+    expect(bucketLists[2].text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
+    expect(bucketLists[3].text()).toMatch(/err-new[\s\S]*err-old/)
+  })
 })
