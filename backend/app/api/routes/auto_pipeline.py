@@ -70,6 +70,64 @@ def add_pending() -> "Response":
     )
 
 
+@auto_pipeline_bp.route("/pending-notes", methods=["POST"])
+def add_pending_note() -> "Response":
+    """Add a rich-text paste entry to the pending bucket.
+
+    Body::
+
+        {
+            "title": "...",       # required
+            "markdown": "...",    # required — already-converted Markdown
+            "allow_duplicate": false  # optional
+        }
+
+    The markdown is written to a content-hashed file under
+    ``backend/data/notes/`` and registered via
+    ``PendingUrlStore.add_pending(md_path=...)``. The downstream drain
+    logic handles it identically to a URL-sourced markdown file.
+    """
+    from ...services.auto.note_store import save_note_to_file
+
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    markdown = (body.get("markdown") or "").strip()
+    allow_dup = bool(body.get("allow_duplicate"))
+
+    if not title:
+        return jsonify({"success": False, "error": "title is required"}), 400
+    if not markdown:
+        return jsonify({"success": False, "error": "markdown is required"}), 400
+
+    try:
+        note_path = save_note_to_file(title=title, body_markdown=markdown)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    store = PendingUrlStore()
+    try:
+        item = store.add_pending(md_path=str(note_path), allow_duplicate=allow_dup)
+        added = [{
+            "title": title,
+            "md_path": str(note_path),
+            "url_fingerprint": item["url_fingerprint"],
+        }]
+        duplicates: list[dict] = []
+    except DuplicateUrlError as error:
+        added = []
+        duplicates = [{
+            "title": title,
+            "md_path": str(note_path),
+            "existing_bucket": error.existing_bucket,
+            "existing_url": error.existing_item.get("url") or error.existing_item.get("md_path"),
+        }]
+
+    return jsonify({
+        "success": True,
+        "data": {"added": added, "duplicates": duplicates},
+    })
+
+
 @auto_pipeline_bp.route("/pending-urls/<fingerprint>", methods=["DELETE"])
 def cancel_pending(fingerprint: str) -> "Response":
     """Remove one pending URL from the queue before it is claimed.

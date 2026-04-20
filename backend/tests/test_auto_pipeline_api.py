@@ -195,3 +195,87 @@ class TestClearErroredEndpoint:
         resp = api_client.post("/api/auto/clear-errored")
         assert resp.status_code == 200
         assert resp.get_json()["data"]["cleared"] == 0
+
+
+# ---------------------------------------------------------------------------
+# POST /api/auto/pending-notes — rich-text paste entry
+# ---------------------------------------------------------------------------
+
+class TestPendingNotesRoute:
+    def test_submit_note_returns_added(self, api_client, tmp_path, monkeypatch):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+
+        resp = api_client.post(
+            "/api/auto/pending-notes",
+            json={"title": "我的第一条笔记", "markdown": "这是正文，很短。"},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["success"] is True
+        added = body["data"]["added"]
+        assert len(added) == 1
+        assert added[0]["title"] == "我的第一条笔记"
+        assert added[0]["url_fingerprint"].startswith("file://")
+
+    def test_submit_note_writes_file_under_notes_dir(
+        self, api_client, tmp_path, monkeypatch
+    ):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        notes_dir = tmp_path / "notes"
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(notes_dir))
+
+        api_client.post(
+            "/api/auto/pending-notes",
+            json={"title": "t", "markdown": "body"},
+        )
+        files = list(notes_dir.glob("*.md"))
+        assert len(files) == 1
+        content = files[0].read_text(encoding="utf-8")
+        assert content.startswith("# t\n")
+        assert "body" in content
+
+    def test_missing_markdown_returns_400(self, api_client, tmp_path, monkeypatch):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+        resp = api_client.post(
+            "/api/auto/pending-notes",
+            json={"title": "t"},
+        )
+        assert resp.status_code == 400
+        assert "markdown" in resp.get_json()["error"].lower()
+
+    def test_missing_title_returns_400(self, api_client, tmp_path, monkeypatch):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+        resp = api_client.post(
+            "/api/auto/pending-notes",
+            json={"markdown": "body"},
+        )
+        assert resp.status_code == 400
+        assert "title" in resp.get_json()["error"].lower()
+
+    def test_non_json_body_returns_400(self, api_client, tmp_path, monkeypatch):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+        resp = api_client.post("/api/auto/pending-notes", data="not json")
+        # Either missing-title OR missing-markdown error counts — both imply
+        # the route gracefully treated the body as empty.
+        assert resp.status_code == 400
+
+    def test_duplicate_note_returns_duplicate_record(
+        self, api_client, tmp_path, monkeypatch
+    ):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+
+        payload = {"title": "same", "markdown": "same body"}
+        first = api_client.post("/api/auto/pending-notes", json=payload)
+        assert first.status_code == 200
+
+        second = api_client.post("/api/auto/pending-notes", json=payload)
+        assert second.status_code == 200
+        body = second.get_json()
+        assert body["data"]["added"] == []
+        assert len(body["data"]["duplicates"]) == 1
+        assert body["data"]["duplicates"][0]["existing_bucket"] == "pending"
