@@ -8,14 +8,12 @@ other local markdown source.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
 
 from app.services.auto.note_store import (
     NOTE_DIR_ENV_VAR,
-    compute_content_fingerprint,
     save_note_to_file,
 )
 
@@ -26,34 +24,6 @@ def note_dir(tmp_path, monkeypatch):
     never scribbles in the real backend/data/notes/."""
     monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path))
     return tmp_path
-
-
-class TestComputeContentFingerprint:
-    def test_identical_content_same_hash(self):
-        a = compute_content_fingerprint("# hello\n\nworld")
-        b = compute_content_fingerprint("# hello\n\nworld")
-        assert a == b
-
-    def test_crlf_normalized_to_lf(self):
-        unix = compute_content_fingerprint("a\nb\nc")
-        windows = compute_content_fingerprint("a\r\nb\r\nc")
-        assert unix == windows
-
-    def test_trailing_whitespace_stripped(self):
-        a = compute_content_fingerprint("hello world")
-        b = compute_content_fingerprint("hello world   \n\n\n")
-        assert a == b
-
-    def test_triple_newlines_collapsed(self):
-        a = compute_content_fingerprint("p1\n\np2")
-        b = compute_content_fingerprint("p1\n\n\n\n\np2")
-        assert a == b
-
-    def test_fingerprint_format_is_sha256_prefixed(self):
-        fp = compute_content_fingerprint("anything")
-        assert fp.startswith("sha256:")
-        # 7 chars for "sha256:" + 64 hex chars
-        assert len(fp) == 7 + 64
 
 
 class TestSaveNoteToFile:
@@ -99,13 +69,17 @@ class TestSaveNoteToFile:
         second = p2.read_text(encoding="utf-8")
         assert first == second
 
-    def test_title_sanitization_for_filesystem_safety(self, note_dir):
-        """Titles with path separators or null bytes must not break the write."""
+    def test_title_with_special_chars_does_not_break_hashing(self, note_dir):
+        """Path separators / null bytes in the title are hashed, never written
+        to the filesystem, so they can't break the write."""
         path = save_note_to_file(
             title="weird/title\x00with:chars",
             body_markdown="body",
         )
         assert path.exists()
+        # Filename is still a clean 64-char hex digest — title chars are hashed, not embedded.
+        assert len(path.stem) == 64
+        assert all(c in "0123456789abcdef" for c in path.stem)
 
     def test_empty_markdown_rejected(self, note_dir):
         with pytest.raises(ValueError, match="empty"):

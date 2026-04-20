@@ -49,17 +49,10 @@ def _normalize_for_hash(markdown: str) -> str:
     return text.strip()
 
 
-def compute_content_fingerprint(markdown: str) -> str:
-    """Return ``sha256:<hex>`` of the normalized markdown content."""
-    normalized = _normalize_for_hash(markdown)
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
-
-
-def _hex_digest(markdown: str, title: str) -> str:
-    """Hash over BOTH title and body so different titles get different files.
-
-    Callers get this back via the filename stem (no ``sha256:`` prefix).
+def _note_filename_digest(title: str, markdown: str) -> str:
+    """Hash over BOTH title and normalized body so different titles get
+    different files. Returned as plain hex (no ``sha256:`` prefix) so it
+    can be used directly as the ``.md`` filename stem.
     """
     combined = f"{title.strip()}\n---\n{_normalize_for_hash(markdown)}"
     return hashlib.sha256(combined.encode("utf-8")).hexdigest()
@@ -77,7 +70,7 @@ def save_note_to_file(*, title: str, body_markdown: str) -> Path:
     if not body_markdown.strip():
         raise ValueError("note body_markdown is empty")
 
-    digest = _hex_digest(body_markdown, title)
+    digest = _note_filename_digest(title, body_markdown)
     target_dir = _note_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{digest}.md"
