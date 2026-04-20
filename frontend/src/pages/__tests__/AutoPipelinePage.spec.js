@@ -806,11 +806,11 @@ describe('AutoPipelinePage', () => {
     expect(serviceMock.mock.calls.length).toBeGreaterThan(liveHits)
   })
 
-  it('auto-expands the errored bucket when there are errored items', async () => {
-    // The errored bucket wraps in a CollapsibleCard with
-    // `force-open="displayBuckets.errored.length > 0"`. On mount with
-    // errored items present and no localStorage entry, the card should
-    // start in the open state so the user sees the failure immediately.
+  it('marks the failed tab as warn when there are errored items', async () => {
+    // After the tab refactor there's no longer an "auto-expand errored
+    // bucket" behavior. Instead, the 失败 tab count turns warn-colored
+    // when errored.length > 0 so the user can see failures at a glance
+    // without jumping to that tab.
     const router = makeMockRouter({
       'get /api/auto/pending-urls': {
         data: {
@@ -831,12 +831,13 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const errored = wrapper.find('[data-test="bucket-errored"]')
-    expect(errored.exists()).toBe(true)
-    expect(errored.element.open).toBe(true)
+    const erroredTab = wrapper.find('[data-test="tab-errored"]')
+    expect(erroredTab.exists()).toBe(true)
+    expect(erroredTab.classes()).toContain('bucket-tab--warn')
+    expect(erroredTab.find('.bucket-tab-count').text()).toBe('1')
   })
 
-  it('sorts all four buckets newest-first', async () => {
+  it('switches the bucket panel when a tab is clicked', async () => {
     const router = makeMockRouter({
       'get /api/auto/pending-urls': {
         data: {
@@ -867,17 +868,56 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    // Task 6 (2026-04-20): 待处理 stays as <article class="bucket-card">
-    // (primary actionable queue); the other three are wrapped in
-    // <CollapsibleCard> and scoped via `data-test`.
-    const pending = wrapper.find('.bucket-card .bucket-list')
-    const errored = wrapper.find('[data-test="bucket-errored"] .bucket-list')
-    const inFlight = wrapper.find('[data-test="bucket-in-flight"] .bucket-list')
-    const processed = wrapper.find('[data-test="bucket-processed"] .bucket-list')
-    expect(pending.text()).toMatch(/new\.example\/b[\s\S]*old\.example\/a/)
-    expect(errored.text()).toMatch(/err-new[\s\S]*err-old/)
-    expect(inFlight.text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
-    expect(processed.text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
+    // Default tab: pending. Panel should show pending items in newest-first order.
+    expect(wrapper.find('[data-test="panel-pending"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="panel-pending"]').text())
+      .toMatch(/new\.example\/b[\s\S]*old\.example\/a/)
+
+    // Click in_flight tab.
+    await wrapper.find('[data-test="tab-in_flight"]').trigger('click')
+    expect(wrapper.find('[data-test="panel-in_flight"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="panel-in_flight"]').text())
+      .toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
+
+    // Click processed tab.
+    await wrapper.find('[data-test="tab-processed"]').trigger('click')
+    expect(wrapper.find('[data-test="panel-processed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="panel-processed"]').text())
+      .toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
+
+    // Click errored tab.
+    await wrapper.find('[data-test="tab-errored"]').trigger('click')
+    expect(wrapper.find('[data-test="panel-errored"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="panel-errored"]').text())
+      .toMatch(/err-new[\s\S]*err-old/)
+
+    // Active tab persists to localStorage.
+    expect(localStorage.getItem('auto-pipeline:active-bucket')).toBe('errored')
+  })
+
+  it('restores the previously-selected tab from localStorage', async () => {
+    localStorage.setItem('auto-pipeline:active-bucket', 'processed')
+    const router = makeMockRouter({
+      'get /api/auto/pending-urls': {
+        data: {
+          pending: [{ url_fingerprint: 'p', url: 'https://pending-item', created_at: '2026-04-20' }],
+          in_flight: [],
+          processed: [{ url_fingerprint: 'q', url: 'https://processed-item', finished_at: '2026-04-20' }],
+          errored: [],
+        },
+      },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="panel-processed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="panel-processed"]').text()).toContain('processed-item')
+    expect(wrapper.find('[data-test="panel-pending"]').exists()).toBe(false)
   })
 
   it('shows "读取失败" in LLM summary when mode load fails; does not duplicate global error', async () => {

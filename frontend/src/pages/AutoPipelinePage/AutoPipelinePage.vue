@@ -19,27 +19,7 @@
 
     <div v-if="error" class="state-card error-card">{{ error }}</div>
 
-    <!-- 1. Stats: always visible (page-level health at a glance) -->
-    <div class="summary-grid">
-      <article class="card">
-        <div class="card-title">待处理</div>
-        <div class="metric-value">{{ buckets.pending.length }}</div>
-      </article>
-      <article class="card">
-        <div class="card-title">执行中</div>
-        <div class="metric-value">{{ buckets.in_flight.length }}</div>
-      </article>
-      <article class="card">
-        <div class="card-title">已完成</div>
-        <div class="metric-value">{{ buckets.processed.length }}</div>
-      </article>
-      <article class="card">
-        <div class="card-title">失败</div>
-        <div class="metric-value">{{ buckets.errored.length }}</div>
-      </article>
-    </div>
-
-    <!-- 2. Add URL form -->
+    <!-- 1. Add URL form (primary entry) -->
     <article class="action-card">
       <div class="card-title">加入新 URL</div>
       <p class="section-copy mini-copy">
@@ -135,41 +115,151 @@
       </CollapsibleCard>
     </article>
 
-    <!-- 5. 待处理 bucket (primary actionable queue, stays expanded) -->
-    <article class="bucket-card">
-      <div class="bucket-header">
-        <div class="card-title">待处理</div>
-        <span class="pending-count-badge">{{ displayBuckets.pending.length }}</span>
+    <!-- 4. Tabbed bucket panel — four statuses share one display frame so
+         the user can switch between 待处理 / 执行中 / 已完成 / 失败 with a
+         single click. Replaces the previous summary-grid + 4 separate
+         bucket cards. -->
+    <section class="bucket-tabs-wrap" data-test="bucket-tabs">
+      <div class="bucket-tabs" role="tablist" aria-label="文章处理状态">
+        <button
+          v-for="tab in bucketTabs"
+          :key="tab.key"
+          type="button"
+          role="tab"
+          :aria-selected="activeBucket === tab.key"
+          :class="[
+            'bucket-tab',
+            activeBucket === tab.key ? 'bucket-tab--active' : '',
+            tab.key === 'errored' && displayBuckets.errored.length > 0 ? 'bucket-tab--warn' : '',
+          ]"
+          :data-test="`tab-${tab.key}`"
+          @click="setActiveBucket(tab.key)"
+        >
+          <span class="bucket-tab-label">{{ tab.title }}</span>
+          <span class="bucket-tab-count">{{ displayBuckets[tab.key].length }}</span>
+        </button>
       </div>
-      <div v-if="!displayBuckets.pending.length" class="empty-note">队列空。把 URL 贴到上面的输入框加入。</div>
-      <div v-else class="bucket-list">
-        <div v-for="item in displayBuckets.pending" :key="itemKey(item)" class="bucket-row">
-          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
-          <div class="bucket-meta">
-            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
-            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
-            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
-            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+
+      <article class="bucket-panel" :data-test="`panel-${activeBucket}`">
+        <!-- 待处理 -->
+        <template v-if="activeBucket === 'pending'">
+          <div v-if="!displayBuckets.pending.length" class="empty-note">队列空。把 URL 贴到上面的输入框加入。</div>
+          <div v-else class="bucket-list">
+            <div v-for="item in displayBuckets.pending" :key="itemKey(item)" class="bucket-row">
+              <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+              <div class="bucket-meta">
+                <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+                <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+                <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+                <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+              </div>
+              <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+              <div class="bucket-actions">
+                <button
+                  class="btn-cancel"
+                  :disabled="cancelingFingerprints.has(item.url_fingerprint)"
+                  @click="cancelPending(item)"
+                >
+                  {{ cancelingFingerprints.has(item.url_fingerprint) ? '取消中...' : '取消' }}
+                </button>
+                <span
+                  v-if="cancelResults[item.url_fingerprint]"
+                  :class="['retry-note', cancelResults[item.url_fingerprint].kind]"
+                >
+                  {{ cancelResults[item.url_fingerprint].text }}
+                </span>
+              </div>
+            </div>
           </div>
-          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
-          <div class="bucket-actions">
+        </template>
+
+        <!-- 执行中 -->
+        <template v-else-if="activeBucket === 'in_flight'">
+          <div v-if="!displayBuckets.in_flight.length" class="empty-note">当前没有进行中的任务。</div>
+          <div v-else class="bucket-list">
+            <div v-for="item in displayBuckets.in_flight" :key="itemKey(item)" class="bucket-row">
+              <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+              <div class="bucket-meta">
+                <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+                <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+                <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+                <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+              </div>
+              <div v-if="item.phase" class="phase-badge-row">
+                <span class="phase-badge">{{ item.phase }}</span>
+              </div>
+              <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 已完成 -->
+        <template v-else-if="activeBucket === 'processed'">
+          <div v-if="!displayBuckets.processed.length" class="empty-note">还没有成功处理过任何 URL。</div>
+          <div v-else class="bucket-list">
+            <div v-for="item in displayBuckets.processed" :key="itemKey(item)" class="bucket-row">
+              <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+              <div class="bucket-meta">
+                <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+                <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+                <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+                <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+              </div>
+              <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 失败 -->
+        <template v-else-if="activeBucket === 'errored'">
+          <div v-if="displayBuckets.errored.length > 0" class="bucket-bulk-row">
             <button
-              class="btn-cancel"
-              :disabled="cancelingFingerprints.has(item.url_fingerprint)"
-              @click="cancelPending(item)"
+              class="btn-bucket btn-bucket-retry"
+              :disabled="!!bulkBusy"
+              @click="retryAllErrored"
             >
-              {{ cancelingFingerprints.has(item.url_fingerprint) ? '取消中...' : '取消' }}
+              {{ bulkBusy === 'retry' ? '重试中...' : '一键重试' }}
             </button>
-            <span
-              v-if="cancelResults[item.url_fingerprint]"
-              :class="['retry-note', cancelResults[item.url_fingerprint].kind]"
+            <button
+              class="btn-bucket btn-bucket-clear"
+              :disabled="!!bulkBusy"
+              @click="clearAllErrored"
             >
-              {{ cancelResults[item.url_fingerprint].text }}
-            </span>
+              {{ bulkBusy === 'clear' ? '清空中...' : '清空' }}
+            </button>
           </div>
-        </div>
-      </div>
-    </article>
+          <div v-if="bulkResult" :class="['bulk-result', bulkResult.kind]">{{ bulkResult.text }}</div>
+          <div v-if="!displayBuckets.errored.length" class="empty-note">还没有失败记录。</div>
+          <div v-else class="bucket-list">
+            <div v-for="item in displayBuckets.errored" :key="itemKey(item)" class="bucket-row">
+              <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+              <div class="bucket-meta">
+                <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+                <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+                <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+                <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+              </div>
+              <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+              <div class="bucket-actions">
+                <button
+                  class="btn-retry"
+                  :disabled="retryingFingerprints.has(item.url_fingerprint)"
+                  @click="retryErrored(item)"
+                >
+                  {{ retryingFingerprints.has(item.url_fingerprint) ? '重试中...' : '重试' }}
+                </button>
+                <span
+                  v-if="retryResults[item.url_fingerprint]"
+                  :class="['retry-note', retryResults[item.url_fingerprint].kind]"
+                >
+                  {{ retryResults[item.url_fingerprint].text }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </template>
+      </article>
+    </section>
 
     <!-- 6. Discover queue — counts + manual run stay visible; attention
          jobs list + cooldown alert collapse into the body. -->
@@ -275,112 +365,7 @@
       </div>
     </CollapsibleCard>
 
-    <!-- 7. 失败 bucket — auto-expands when there are items -->
-    <CollapsibleCard
-      title="失败"
-      :badge="displayBuckets.errored.length"
-      storage-key="auto-pipeline:collapse:bucket-errored"
-      :force-open="displayBuckets.errored.length > 0"
-      data-test="bucket-errored"
-    >
-      <template #summary-extra>
-        <span v-if="displayBuckets.errored.length > 0" class="bucket-header-actions">
-          <button
-            class="btn-bucket btn-bucket-retry"
-            :disabled="!!bulkBusy"
-            @click.stop.prevent="retryAllErrored"
-          >
-            {{ bulkBusy === 'retry' ? '重试中...' : '一键重试' }}
-          </button>
-          <button
-            class="btn-bucket btn-bucket-clear"
-            :disabled="!!bulkBusy"
-            @click.stop.prevent="clearAllErrored"
-          >
-            {{ bulkBusy === 'clear' ? '清空中...' : '清空' }}
-          </button>
-        </span>
-      </template>
-
-      <div v-if="bulkResult" :class="['bulk-result', bulkResult.kind]">{{ bulkResult.text }}</div>
-      <div v-if="!displayBuckets.errored.length" class="empty-note">还没有失败记录。</div>
-      <div v-else class="bucket-list">
-        <div v-for="item in displayBuckets.errored" :key="itemKey(item)" class="bucket-row">
-          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
-          <div class="bucket-meta">
-            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
-            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
-            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
-            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
-          </div>
-          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
-          <div class="bucket-actions">
-            <button
-              class="btn-retry"
-              :disabled="retryingFingerprints.has(item.url_fingerprint)"
-              @click="retryErrored(item)"
-            >
-              {{ retryingFingerprints.has(item.url_fingerprint) ? '重试中...' : '重试' }}
-            </button>
-            <span
-              v-if="retryResults[item.url_fingerprint]"
-              :class="['retry-note', retryResults[item.url_fingerprint].kind]"
-            >
-              {{ retryResults[item.url_fingerprint].text }}
-            </span>
-          </div>
-        </div>
-      </div>
-    </CollapsibleCard>
-
-    <!-- 8. 执行中 bucket -->
-    <CollapsibleCard
-      title="执行中"
-      :badge="displayBuckets.in_flight.length"
-      storage-key="auto-pipeline:collapse:bucket-in-flight"
-      data-test="bucket-in-flight"
-    >
-      <div v-if="!displayBuckets.in_flight.length" class="empty-note">当前没有进行中的任务。</div>
-      <div v-else class="bucket-list">
-        <div v-for="item in displayBuckets.in_flight" :key="itemKey(item)" class="bucket-row">
-          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
-          <div class="bucket-meta">
-            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
-            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
-            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
-            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
-          </div>
-          <div v-if="item.phase" class="phase-badge-row">
-            <span class="phase-badge">{{ item.phase }}</span>
-          </div>
-          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
-        </div>
-      </div>
-    </CollapsibleCard>
-
-    <!-- 9. 已完成 bucket -->
-    <CollapsibleCard
-      title="已完成"
-      :badge="displayBuckets.processed.length"
-      storage-key="auto-pipeline:collapse:bucket-processed"
-      data-test="bucket-processed"
-    >
-      <div v-if="!displayBuckets.processed.length" class="empty-note">还没有成功处理过任何 URL。</div>
-      <div v-else class="bucket-list">
-        <div v-for="item in displayBuckets.processed" :key="itemKey(item)" class="bucket-row">
-          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
-          <div class="bucket-meta">
-            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
-            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
-            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
-            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
-          </div>
-          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
-        </div>
-      </div>
-    </CollapsibleCard>
-
-    <!-- 10. LLM 抽取模式（配置，沉底） -->
+    <!-- LLM 抽取模式（配置，沉底） -->
     <CollapsibleCard
       title="抽取模式"
       subtitle="切换 Graphiti 抽取走本地 LM Studio 还是百炼（DashScope）在线 API。切换只影响下一个任务, 有任务在跑的时候会被拒绝。"
@@ -578,6 +563,40 @@ const crumbs = [
 ]
 
 const buckets = ref({ pending: [], in_flight: [], processed: [], errored: [] })
+
+// Four-way tab state: which bucket is shown in the shared panel. Persists
+// across reloads via localStorage so the user can return to their
+// last-viewed slice. Defaults to 'pending' (primary work view).
+const BUCKET_TAB_STORAGE_KEY = 'auto-pipeline:active-bucket'
+const BUCKET_KEYS = ['pending', 'in_flight', 'processed', 'errored']
+const bucketTabs = [
+  { key: 'pending', title: '待处理' },
+  { key: 'in_flight', title: '执行中' },
+  { key: 'processed', title: '已完成' },
+  { key: 'errored', title: '失败' },
+]
+
+function readInitialActiveBucket() {
+  try {
+    const stored = localStorage.getItem(BUCKET_TAB_STORAGE_KEY)
+    if (BUCKET_KEYS.includes(stored)) return stored
+  } catch {
+    /* localStorage unavailable — fall through */
+  }
+  return 'pending'
+}
+
+const activeBucket = ref(readInitialActiveBucket())
+
+function setActiveBucket(key) {
+  if (!BUCKET_KEYS.includes(key)) return
+  activeBucket.value = key
+  try {
+    localStorage.setItem(BUCKET_TAB_STORAGE_KEY, key)
+  } catch {
+    /* ignore persistence failure; in-memory state still flips */
+  }
+}
 const loading = ref(false)
 const adding = ref(false)
 const running = ref(false)
@@ -1350,9 +1369,6 @@ watch(appMode, async () => {
 .section-copy { color: #5a6573; line-height: 1.6; }
 .mini-copy { font-size: 13px; margin: 6px 0 12px; }
 
-.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
-.summary-grid .card { padding: 12px 14px; }
-.summary-grid .metric-value { font-size: 24px; }
 
 .discover-counts {
   display: grid;
@@ -1551,7 +1567,7 @@ watch(appMode, async () => {
   color: #c45a4a;
   font-size: 13px;
 }
-.card, .action-card, .bucket-card, .state-card {
+.card, .action-card, .state-card {
   border: 1px solid #d4dce8;
   background: linear-gradient(180deg, #fcfdff 0%, #f5f8ff 100%);
   border-radius: 18px;
@@ -1692,36 +1708,76 @@ watch(appMode, async () => {
 .bucket-url { font-weight: 600; color: #1d1d1d; font-size: 13px; word-break: break-all; }
 .bucket-meta { color: #5a6573; font-size: 11px; margin-top: 3px; }
 .bucket-error { color: #c62828; font-size: 12px; margin-top: 4px; }
-.bucket-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
+/* Tabbed bucket panel: 4 status tabs share a single content frame so
+   the user can flip between pending / in_flight / processed / errored
+   without scrolling through 4 separate cards. */
+.bucket-tabs-wrap {
+  margin-bottom: 16px;
 }
-.bucket-header .card-title {
-  font-weight: 600;
-  font-size: 14px;
-  color: #111827;
+.bucket-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e5e7eb;
   margin-bottom: 0;
 }
-.bucket-header-actions {
+.bucket-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  color: #6b7280;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  border-radius: 8px 8px 0 0;
+}
+.bucket-tab:hover {
+  background: #f9fafb;
+  color: #1d1d1d;
+}
+.bucket-tab-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+.bucket-tab-count {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1d1d1d;
+}
+.bucket-tab--active {
+  color: #4a6fa5;
+  border-bottom-color: #4a6fa5;
+  background: #fff;
+}
+.bucket-tab--active .bucket-tab-label {
+  font-weight: 600;
+}
+.bucket-tab--warn .bucket-tab-count {
+  color: #c62828;
+}
+.bucket-tab--active.bucket-tab--warn {
+  border-bottom-color: #c62828;
+  color: #c62828;
+}
+.bucket-panel {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  padding: 16px 18px;
+  min-height: 80px;
+}
+.bucket-bulk-row {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-/* Pending bucket count badge — mirrors CollapsibleCard's `.cc-badge` so
-   the un-wrapped 待处理 header has the same visual rhythm as the wrapped
-   buckets' titles. */
-.pending-count-badge {
-  background: #eef2ff;
-  color: #3730a3;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-  line-height: 1.5;
-  margin-right: auto;
+  margin-bottom: 10px;
 }
 .btn-bucket {
   border-radius: 8px;
@@ -1868,7 +1924,8 @@ watch(appMode, async () => {
 .mode-meta { margin-top: 10px; font-size: 12px; color: #77682a; }
 
 @media (max-width: 900px) {
-  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  .bucket-tab-label { font-size: 12px; }
+  .bucket-tab-count { font-size: 16px; }
 }
 
 .cc-inline-meta {
