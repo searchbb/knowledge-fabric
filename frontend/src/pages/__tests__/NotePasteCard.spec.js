@@ -118,6 +118,25 @@ describe('NotePasteCard', () => {
       expect(titleInput.value).toBe('')
     })
 
+    it('strips inline markdown formatting from the derived title', async () => {
+      // A Twitter-style first line produces bold + link after Turndown:
+      // "**@karpathy**: A quick note on [tokenizer](https://x)"
+      // The derived title should be the readable text, not the raw MD.
+      const wrapper = mount(NotePasteCard)
+      const editor = wrapper.find('[data-test="note-editor"]')
+      editor.element.dispatchEvent(
+        pasteEvent(makeClipboardData({
+          html: '<p><b>@karpathy</b>: A note on <a href="https://example.com">tokenizer</a></p>',
+        })),
+      )
+      await flushPromises()
+      const titleInput = wrapper.find('[data-test="note-title"]').element
+      expect(titleInput.value).not.toMatch(/[*_`~]/)
+      expect(titleInput.value).not.toMatch(/\[.*?\]\(/)
+      expect(titleInput.value).toContain('@karpathy')
+      expect(titleInput.value).toContain('tokenizer')
+    })
+
     it('does not overwrite a user-typed title on subsequent pastes', async () => {
       const wrapper = mount(NotePasteCard)
       const titleInput = wrapper.find('[data-test="note-title"]')

@@ -89,9 +89,17 @@ function onTitleTyped() {
 function deriveTitle(md) {
   const lines = md.split('\n').map((l) => l.trim()).filter(Boolean)
   if (!lines.length) return ''
+  // Strip inline markdown formatting so a Twitter-style first-line like
+  // "**@karpathy**: A note on [tokenizer](url)" yields a clean title,
+  // not one riddled with asterisks and brackets. Matches the backend's
+  // extract_title_from_markdown in article_workspace_pipeline.py.
+  const stripFmt = (s) => s
+    .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+    .replace(/[*_`~]/g, '')
+    .trim()
   const h1 = lines.find((l) => l.startsWith('# '))
-  if (h1) return h1.replace(/^#\s+/, '').trim().slice(0, 60)
-  return lines[0].replace(/^[#>*\-]\s*/, '').trim().slice(0, 30)
+  if (h1) return stripFmt(h1.replace(/^#\s+/, '')).slice(0, 60)
+  return stripFmt(lines[0].replace(/^[#>*\-]\s*/, '')).slice(0, 30)
 }
 
 async function fileToDataUrl(file) {
