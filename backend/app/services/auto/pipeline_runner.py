@@ -29,6 +29,8 @@ from typing import Any, Optional
 
 from .build_verifier import BuildVerificationResult, BuildVerifier
 from .concept_decider import AutoConceptDecider, ConceptDecision
+from .discover_job_store import DiscoverJobStore
+from .discover_skip_log import DiscoverSkipLog
 from .pending_store import PendingUrlStore
 from .registry_linker import AutoLinkSummary, AutoRegistryLinker
 from .theme_proposer import AutoThemeProposer, AutoThemeResult
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_FRONTEND_BASE_URL = "http://localhost:3000"
 _VITE_PORT_RE = re.compile(r"\bport\s*:\s*(\d+)")
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 
 
 # ---------------------------------------------------------------------------
@@ -48,11 +51,13 @@ _VITE_PORT_RE = re.compile(r"\bport\s*:\s*(\d+)")
 
 # Total per-URL timeout. After this many seconds of real time, the runner
 # gives up on the current URL, cancels any live build tasks for it, and
-# marks the URL errored. 20 minutes is long enough for a normal WeChat
-# article with 15 chunks on local qwen3-30b and short enough that a stuck
-# URL won't dominate an 8-hour overnight window.
+# marks the URL errored. 60 minutes covers long-form research articles
+# (Deloitte Insights, long WeChat essays ~40k chars) under Bailian
+# cloud-provider concurrency, while still bounding a stuck URL from
+# dominating an 8-hour overnight window. The stall timeout below is the
+# real "stuck" detector — total timeout is only the overnight guardrail.
 AUTO_PIPELINE_TOTAL_TIMEOUT_SECONDS = int(
-    os.environ.get("AUTO_PIPELINE_TOTAL_TIMEOUT_SECONDS", "1200")
+    os.environ.get("AUTO_PIPELINE_TOTAL_TIMEOUT_SECONDS", "3600")
 )
 
 # No-progress window. If the latest build task's progress + message stay
@@ -66,18 +71,43 @@ AUTO_PIPELINE_WATCHDOG_INTERVAL_SECONDS = int(
     os.environ.get("AUTO_PIPELINE_WATCHDOG_INTERVAL_SECONDS", "15")
 )
 
+# Once the graph task itself is already completed, only a short post-build
+# tail should remain (reading-view capture, note writeback). If that tail
+# hangs, recover from the durable project record instead of blocking the
+# whole auto pipeline indefinitely.
+AUTO_PIPELINE_POST_BUILD_GRACE_SECONDS = float(
+    os.environ.get("AUTO_PIPELINE_POST_BUILD_GRACE_SECONDS", "30")
+)
+
+
+def _is_loopback_http_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    return (parsed.hostname or "").strip().lower() in _LOOPBACK_HOSTS
+
 
 class AutoPipelineTimeoutError(RuntimeError):
     """Raised when the per-URL watchdog gives up on a stuck pipeline run.
 
     Distinct from generic RuntimeError so the runner can mark the URL as
     ``errored_timeout`` (retryable) rather than a hard ``errored`` fail.
+
+    ``project_id`` is captured from the build task's metadata while the
+    watchdog is polling, so the errored-out record still points at the
+    half-built project for manual recovery.
     """
 
-    def __init__(self, reason: str, *, phase: str, task_id: Optional[str] = None):
+    def __init__(
+        self,
+        reason: str,
+        *,
+        phase: str,
+        task_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ):
         super().__init__(reason)
         self.phase = phase
         self.task_id = task_id
+        self.project_id = project_id
 
 
 @dataclass
@@ -131,10 +161,14 @@ class AutoPipelineRunner:
         decider: Optional[AutoConceptDecider] = None,
         linker: Optional[AutoRegistryLinker] = None,
         theme_proposer: Optional[AutoThemeProposer] = None,
+        discover_job_store: Optional[DiscoverJobStore] = None,
+        discover_skip_log: Optional[DiscoverSkipLog] = None,
         actor_id: str = "auto_pipeline",
         source: str = "auto_url_pipeline",
     ) -> None:
         self.store = store or PendingUrlStore()
+        self.discover_job_store = discover_job_store or DiscoverJobStore()
+        self.discover_skip_log = discover_skip_log or DiscoverSkipLog()
         self.backend_base_url = (
             backend_base_url
             or os.environ.get("MIROFISH_BACKEND_BASE_URL")
@@ -248,12 +282,16 @@ class AutoPipelineRunner:
                 run_id=run_id,
             )
 
-            # Soft-failing enrich phase: bridge this article's new concepts to
-            # the rest of its theme. Failures are captured into discover_stats
-            # but never escape — the article still mark_processed below.
+            # P1 (Discover V2): discover is no longer executed inline. The
+            # pipeline only schedules a background job; a worker / the
+            # scripts/run_discover_jobs.py drainer picks it up afterwards.
+            # This keeps the main pipeline's wall-clock bounded by fetch +
+            # build + verify + concept + registry + theme, which is the
+            # user-visible latency.
             self.store.heartbeat(run_id, phase="discover")
-            discover_stats = self._auto_discover_relations(
+            discover_stats = self._schedule_discover_job(
                 theme_id=theme_result.theme_id,
+                trigger_project_id=outcome.project_id or "",
                 new_entry_ids=new_canonical_ids,
                 run_id=run_id,
             )
@@ -294,6 +332,12 @@ class AutoPipelineRunner:
             outcome.error = str(timeout_exc)
             outcome.phase = timeout_exc.phase or "timeout"
             outcome.status = "errored"
+            # ``_invoke_article_pipeline_with_watchdog`` never returned, so
+            # ``outcome.project_id`` is still None here. The watchdog
+            # captured it from the build task metadata — fall back to that
+            # so the errored record still points at the half-built project.
+            if not outcome.project_id and timeout_exc.project_id:
+                outcome.project_id = timeout_exc.project_id
             try:
                 self.store.mark_errored(
                     run_id,
@@ -440,7 +484,9 @@ class AutoPipelineRunner:
         last_progress_signature: Optional[tuple[int, str]] = None
         stall_start: Optional[float] = None
         watched_task_id: Optional[str] = None
+        watched_project_id: Optional[str] = None
         last_phase = "build"
+        post_build_started_at: Optional[float] = None
 
         try:
             while True:
@@ -464,6 +510,11 @@ class AutoPipelineRunner:
                 if snapshot is not None:
                     active_build_task = True
                     watched_task_id = snapshot.get("task_id") or watched_task_id
+                    snapshot_project_id = (
+                        (snapshot.get("metadata") or {}).get("project_id")
+                    )
+                    if snapshot_project_id:
+                        watched_project_id = snapshot_project_id
                     last_phase = (
                         "build_verify"
                         if snapshot.get("progress", 0) >= 55
@@ -473,6 +524,7 @@ class AutoPipelineRunner:
                         int(snapshot.get("progress") or 0),
                         str(snapshot.get("message") or ""),
                     )
+                    post_build_started_at = None
                     if current_sig != last_progress_signature:
                         last_progress_signature = current_sig
                         stall_start = time.monotonic()
@@ -490,6 +542,26 @@ class AutoPipelineRunner:
                         last_progress_signature = None
                         stall_start = None
                         last_phase = "post_build"
+                        if post_build_started_at is None:
+                            post_build_started_at = time.monotonic()
+                        if (
+                            watched_status == "completed"
+                            and watched_project_id
+                            and time.monotonic() - post_build_started_at
+                            > AUTO_PIPELINE_POST_BUILD_GRACE_SECONDS
+                        ):
+                            recovered = self._recover_completed_project_result(
+                                watched_project_id
+                            )
+                            if recovered is not None:
+                                logger.warning(
+                                    "auto pipeline run %s: recovered completed "
+                                    "project %s after post_build tail exceeded %.1fs",
+                                    run_id,
+                                    watched_project_id,
+                                    AUTO_PIPELINE_POST_BUILD_GRACE_SECONDS,
+                                )
+                                return recovered
 
                 if elapsed > AUTO_PIPELINE_TOTAL_TIMEOUT_SECONDS:
                     self._request_cancel(
@@ -500,6 +572,7 @@ class AutoPipelineRunner:
                         f"(limit {AUTO_PIPELINE_TOTAL_TIMEOUT_SECONDS}s)",
                         phase=last_phase,
                         task_id=watched_task_id,
+                        project_id=watched_project_id,
                     )
 
                 if (
@@ -517,6 +590,7 @@ class AutoPipelineRunner:
                         f"(limit {AUTO_PIPELINE_STALL_TIMEOUT_SECONDS}s)",
                         phase=last_phase,
                         task_id=watched_task_id,
+                        project_id=watched_project_id,
                     )
         finally:
             # Do NOT wait on the future — if we raised, the worker is
@@ -557,6 +631,51 @@ class AutoPipelineRunner:
         except Exception:  # noqa: BLE001
             return None
         return body.get("data") or None
+
+    def _recover_completed_project_result(
+        self, project_id: Optional[str]
+    ) -> Optional[dict[str, Any]]:
+        """Recover the minimal pipeline result from a completed project."""
+        if not project_id:
+            return None
+        try:
+            body = self._http_get(
+                f"{self.backend_base_url}/api/graph/project/{project_id}"
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+        project = body.get("data") or {}
+        if str(project.get("status") or "") != "graph_completed":
+            return None
+
+        graph_id = str(project.get("graph_id") or "").strip()
+        if not graph_id:
+            return None
+
+        content_hash = None
+        md_path = ""
+        for file_item in project.get("files") or []:
+            candidate = str(file_item.get("source_md_path") or "").strip()
+            if not candidate:
+                continue
+            md_path = candidate
+            try:
+                with open(candidate, encoding="utf-8") as handle:
+                    content_hash = compute_content_hash(handle.read())
+            except Exception:  # noqa: BLE001
+                content_hash = None
+            break
+
+        project_name = str(project.get("name") or "").strip() or "Auto pipeline project"
+        return {
+            "project_id": project_id,
+            "graph_id": graph_id,
+            "project_name": project_name,
+            "title": project_name,
+            "md_path": md_path,
+            "content_hash": content_hash,
+        }
 
     def _request_cancel(
         self, task_id: Optional[str], *, reason: str
@@ -702,40 +821,32 @@ class AutoPipelineRunner:
             run_id=run_id,
         )
 
-    def _auto_discover_relations(
+    def _schedule_discover_job(
         self,
         *,
         theme_id: Optional[str],
+        trigger_project_id: str,
         new_entry_ids: list[str],
         run_id: str,
     ) -> dict[str, Any]:
-        """Inline cross-concept relation discovery — soft-failing enrich phase.
+        """Record a pending cross-concept discover job and return a stats dict.
 
-        Designed per GPT design review (consult ID f09fb61ce5e8a061, 2026-04-16):
-        - Increment-only scope: at least one endpoint in new_entry_ids
-        - Theme-scoped: skip when theme_proposer didn't classify into a theme
-        - Soft fail: any exception is captured into the returned dict's
-          'error' field; the caller still mark_processed the article. The
-          rationale is "discover is enrich, not gate" — failing the whole
-          article because LLM cross-relation judgment hiccupped would punish
-          the user for a non-essential phase. Errors are still surfaced
-          explicitly in summary.discover so this is partial-success-with-
-          warning, NOT a silent fallback.
+        Replaces the previous inline ``_auto_discover_relations`` +
+        ``_run_discover_with_timeout`` pair. The main pipeline no longer
+        blocks on LLM judgment — a background worker (or the
+        ``scripts/run_discover_jobs.py`` drainer in the P1 first cut) picks
+        the job up later.
 
-        Returns the structured stats dict that gets nested under
-        summary.discover. attempted=False means we didn't run because the
-        prerequisites weren't met (no theme / no new entries).
+        Returns the stats payload that gets nested under ``summary.discover``.
+        When prerequisites are missing (no theme assigned, no new canonical
+        entries), no job is created and ``scheduled`` is False so the audit
+        trail still explains what happened.
         """
         stats: dict[str, Any] = {
-            "attempted": False,
+            "scheduled": False,
             "theme_id": theme_id,
             "new_entry_count": len(new_entry_ids),
-            "candidate_pairs": 0,
-            "created_relations": 0,
-            "deduped_pairs": 0,
-            "error": None,
         }
-
         if not theme_id:
             stats["skipped_reason"] = "no theme assigned (theme_proposer returned noop)"
             return stats
@@ -743,44 +854,125 @@ class AutoPipelineRunner:
             stats["skipped_reason"] = "no new canonical entries this run"
             return stats
 
-        from .cross_concept_discoverer import CrossConceptDiscoverer
-
-        discoverer = CrossConceptDiscoverer(
-            actor_id=self.actor_id,
-            source=self.source,
-        )
-        stats["attempted"] = True
+        # P4 step 11: global daily budget soft-gate. Bounds total discover
+        # jobs per calendar day across all themes so a runaway-article
+        # ingest can't drain LLM credit overnight. Default cap = 50/day;
+        # override via DISCOVER_DAILY_JOB_BUDGET=N, or set to 0 to disable.
         try:
-            result = discoverer.discover(
+            _daily_budget = int(os.environ.get("DISCOVER_DAILY_JOB_BUDGET", "50"))
+        except ValueError:
+            _daily_budget = 50
+        if _daily_budget > 0:
+            try:
+                today_count = self.discover_job_store.count_started_today()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "auto pipeline run %s: daily budget counter failed, allowing: %s",
+                    run_id,
+                    exc,
+                )
+                today_count = 0
+            if today_count >= _daily_budget:
+                stats["skipped_reason"] = (
+                    f"daily budget exceeded: {today_count} discover jobs "
+                    f"created today (cap={_daily_budget})"
+                )
+                stats["daily_count"] = today_count
+                stats["daily_budget"] = _daily_budget
+                # Surface this throttle event to the UI via the rolling
+                # skip log. Soft-fail: log infra glitches must not turn
+                # a cheap skip into a pipeline error.
+                try:
+                    self.discover_skip_log.append(
+                        reason=stats["skipped_reason"],
+                        kind="daily_budget",
+                        theme_id=theme_id,
+                        trigger_project_id=trigger_project_id,
+                        origin_run_id=run_id,
+                    )
+                except Exception as log_exc:  # noqa: BLE001
+                    logger.warning(
+                        "auto pipeline run %s: skip_log append failed "
+                        "(non-fatal): %s",
+                        run_id,
+                        log_exc,
+                    )
+                return stats
+
+        # P4 step 10: per-theme per-hour cooldown. Bounds pathological
+        # cases where a single theme spawns discover jobs faster than
+        # the worker can drain them (e.g. a script re-ingesting the
+        # same article on a loop). Default cap = 10/hour; override via
+        # DISCOVER_THEME_HOURLY_CAP=N.
+        try:
+            _theme_cap = int(os.environ.get("DISCOVER_THEME_HOURLY_CAP", "10"))
+        except ValueError:
+            _theme_cap = 10
+        if _theme_cap > 0:
+            try:
+                recent = self.discover_job_store.count_recent_for_theme(
+                    theme_id, window_seconds=3600
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Don't let a counter glitch block scheduling — soft-fail
+                # the rate check rather than the whole schedule.
+                logger.warning(
+                    "auto pipeline run %s: theme cooldown counter failed, allowing: %s",
+                    run_id,
+                    exc,
+                )
+                recent = 0
+            if recent >= _theme_cap:
+                stats["skipped_reason"] = (
+                    f"theme cooldown: {recent} discover jobs created for this theme "
+                    f"in the last hour (cap={_theme_cap})"
+                )
+                stats["theme_hourly_count"] = recent
+                stats["theme_hourly_cap"] = _theme_cap
+                try:
+                    self.discover_skip_log.append(
+                        reason=stats["skipped_reason"],
+                        kind="theme_cooldown",
+                        theme_id=theme_id,
+                        trigger_project_id=trigger_project_id,
+                        origin_run_id=run_id,
+                    )
+                except Exception as log_exc:  # noqa: BLE001
+                    logger.warning(
+                        "auto pipeline run %s: skip_log append failed "
+                        "(non-fatal): %s",
+                        run_id,
+                        log_exc,
+                    )
+                return stats
+
+        try:
+            job = self.discover_job_store.create_job(
                 theme_id=theme_id,
-                new_entry_ids=new_entry_ids,
-                run_id=run_id,
+                trigger_project_id=trigger_project_id,
+                new_entry_ids=list(new_entry_ids),
+                origin_run_id=run_id,
             )
-            stats["candidate_pairs"] = result.get("candidates_count", 0)
-            stats["created_relations"] = result.get("discovered", 0)
-            stats["deduped_pairs"] = result.get("skipped", 0)
-            inner_errors = result.get("errors") or []
-            if inner_errors:
-                # Per-chunk LLM failures don't fail the phase, but should be
-                # visible. Join concise — full list lives in the discoverer log.
-                stats["error"] = "; ".join(str(e) for e in inner_errors[:3])
-                if len(inner_errors) > 3:
-                    stats["error"] += f" (+{len(inner_errors) - 3} more)"
-            if "reason" in result:
-                stats["reason"] = result["reason"]
-            # Pass through the diagnostic fields the discoverer added per GPT
-            # consult e297dd59ad8ab94b — these answer "why is candidate_pairs
-            # 0?" without forcing the user to grep logs.
-            for diag_key in ("scope", "theme_member_count", "theme_article_count", "eligible_entry_count"):
-                if diag_key in result:
-                    stats[diag_key] = result[diag_key]
         except Exception as exc:  # noqa: BLE001
+            # Discover scheduling is a soft-fail enrich: if the job store
+            # itself is broken, we surface the error in the summary but the
+            # article still marks processed. Matches the previous inline
+            # policy (discover is enrich, not gate).
             logger.warning(
-                "auto pipeline run %s: discover phase soft-failed: %s",
+                "auto pipeline run %s: failed to schedule discover job: %s",
                 run_id,
                 exc,
             )
             stats["error"] = str(exc)
+            return stats
+
+        stats.update(
+            {
+                "scheduled": True,
+                "job_id": job["job_id"],
+                "status": job["status"],
+            }
+        )
         return stats
 
     # ------------------------------------------------------------------
@@ -819,7 +1011,7 @@ class AutoPipelineRunner:
     @staticmethod
     def _http_get(url: str) -> dict[str, Any]:
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with AutoPipelineRunner._open_url(req, timeout=30) as resp:
             data = resp.read()
         import json as _json
         return _json.loads(data.decode("utf-8"))
@@ -834,9 +1026,18 @@ class AutoPipelineRunner:
             method=method,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with AutoPipelineRunner._open_url(req, timeout=60) as resp:
             data = resp.read()
         return _json.loads(data.decode("utf-8"))
+
+    @staticmethod
+    def _open_url(
+        req: urllib.request.Request, *, timeout: int | float
+    ):
+        if _is_loopback_http_url(req.full_url):
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            return opener.open(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout)
 
     @staticmethod
     def _mark_theme_governance_scan_requested(*, reason: str = "post_drain") -> None:

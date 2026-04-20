@@ -11,6 +11,12 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from app.services.auto.cross_concept_discoverer import CrossConceptDiscoverer
+from app.services.registry.cross_concept_relations import VALID_RELATION_TYPES
+
+# Frozen copy so the test is explicit about the universe it's constructing
+# dedupe keys over. If a new relation type gets added upstream, this test
+# will need to be updated — intentional, since new types broaden dedupe.
+_ALL_RELATION_TYPES = tuple(sorted(VALID_RELATION_TYPES))
 
 
 def _concept(entry_id: str, project_id: str, ctype: str = "Topic") -> dict:
@@ -139,9 +145,17 @@ def test_discover_returns_generic_no_pair_reason_when_multiple_articles():
             return_value=fake_entries,
         ),
         # Pretend every pair is already deduped so candidates collapses to 0.
+        # P1.5: Stage 1 no longer calls has_dedupe_key per-pair; it loads
+        # the dedupe set once via load_existing_dedupe_keys. We stub that
+        # to return a set containing every possible (a,b) and (b,a) key
+        # across VALID_RELATION_TYPES so the recall loop's "already
+        # exists" branch fires for this one pair.
         patch(
-            "app.services.auto.cross_concept_discoverer.has_dedupe_key",
-            return_value=True,
+            "app.services.auto.cross_concept_discoverer.load_existing_dedupe_keys",
+            return_value={
+                f"e1|{rt}|e2" for rt in _ALL_RELATION_TYPES
+            }
+            | {f"e2|{rt}|e1" for rt in _ALL_RELATION_TYPES},
         ),
     ):
         result = d.discover(

@@ -87,6 +87,243 @@
       </article>
     </div>
 
+    <!-- Discover queue status (Discover V2 / P1.4) -->
+    <!-- Separated visually from the main "文章处理" bucket cards above.
+         Those four cards track URL-level lifecycle; this card tracks the
+         *background* cross-concept discover queue, which is a completely
+         different workload (enrich, not gate). -->
+    <article class="card discover-card">
+      <div class="discover-head">
+        <div class="card-title">Discover 队列 · 跨文章关系发现</div>
+        <span class="discover-total">共 {{ discoverStats.total }} 条</span>
+      </div>
+      <p class="section-copy mini-copy">
+        文章主流程不再等这一步。每篇新文章会在这里落一条待办，后台或手动运行去兑现它。
+      </p>
+      <div class="discover-counts">
+        <div class="dc-metric">
+          <span class="dc-label">待办</span>
+          <span class="dc-value">{{ discoverStats.by_status.pending || 0 }}</span>
+        </div>
+        <div class="dc-metric">
+          <span class="dc-label">运行中</span>
+          <span class="dc-value">{{ discoverStats.by_status.running || 0 }}</span>
+        </div>
+        <div class="dc-metric">
+          <span class="dc-label">完成</span>
+          <span class="dc-value">{{ discoverStats.by_status.completed || 0 }}</span>
+        </div>
+        <div class="dc-metric">
+          <span class="dc-label">部分完成</span>
+          <span class="dc-value">{{ discoverStats.by_status.partial || 0 }}</span>
+        </div>
+        <div class="dc-metric">
+          <span class="dc-label">失败</span>
+          <span class="dc-value dc-value--warn">{{ discoverStats.by_status.failed || 0 }}</span>
+        </div>
+      </div>
+      <div class="action-row discover-actions">
+        <button
+          class="btn-small"
+          :disabled="discoverRunning || (discoverStats.by_status.pending || 0) === 0"
+          @click="runOneDiscover"
+        >
+          {{ discoverRunning ? '运行中...' : '手动运行一条' }}
+        </button>
+        <button class="btn-small" :disabled="discoverRunning" @click="refreshDiscover">刷新</button>
+        <span v-if="discoverLastResult" :class="['retry-note', discoverLastResult.kind]">
+          {{ discoverLastResult.text }}
+        </span>
+      </div>
+
+      <!-- Cooldown / budget throttle alert (P4 audit follow-up 2026-04-17).
+           Only rendered when something was actually blocked in the last
+           hour, so a healthy queue doesn't get a noisy banner. -->
+      <div v-if="discoverSkips.total > 0" class="discover-skip-alert">
+        <div class="skip-alert-head">
+          <span class="skip-alert-icon" aria-hidden="true">⚠</span>
+          <span class="skip-alert-title">
+            过去 1 小时有 {{ discoverSkips.total }} 次调度被拦截
+          </span>
+        </div>
+        <div class="skip-alert-breakdown">
+          <span v-if="discoverSkips.by_kind.theme_cooldown" class="skip-chip">
+            主题冷却 {{ discoverSkips.by_kind.theme_cooldown }}
+          </span>
+          <span v-if="discoverSkips.by_kind.daily_budget" class="skip-chip">
+            日预算 {{ discoverSkips.by_kind.daily_budget }}
+          </span>
+          <span v-if="discoverSkips.by_kind.other" class="skip-chip">
+            其他 {{ discoverSkips.by_kind.other }}
+          </span>
+        </div>
+        <div v-if="discoverSkips.latest" class="skip-alert-latest" :title="discoverSkips.latest.reason">
+          最近一次：{{ discoverSkips.latest.reason }}
+        </div>
+      </div>
+
+      <!-- Job list: only surface jobs that need attention. Completed ones
+           live in the counters above so we don't bloat this list with the
+           long tail of successful runs. -->
+      <div v-if="discoverAttentionJobs.length > 0" class="discover-jobs">
+        <div class="discover-jobs-title">需要关注的任务 ({{ discoverAttentionJobs.length }})</div>
+        <div
+          v-for="job in discoverAttentionJobs"
+          :key="job.job_id"
+          class="discover-job-row discover-job-row--clickable"
+          role="button"
+          tabindex="0"
+          @click="openJobDrawer(job.job_id)"
+          @keyup.enter="openJobDrawer(job.job_id)"
+        >
+          <span :class="['dj-status', `dj-status--${job.status}`]">{{ discoverStatusLabel(job.status) }}</span>
+          <span class="dj-id" :title="job.job_id">{{ shortJobId(job.job_id) }}</span>
+          <span v-if="job.last_error" class="dj-error" :title="job.last_error">{{ job.last_error }}</span>
+          <span v-else-if="job.new_entry_ids && job.new_entry_ids.length" class="dj-meta">
+            {{ job.new_entry_ids.length }} 个新概念
+          </span>
+          <span class="dj-spacer"></span>
+          <!-- Action buttons stop propagation so clicking them doesn't also
+               open the drawer. -->
+          <button
+            v-if="canRetry(job.status)"
+            class="btn-tiny"
+            :disabled="discoverBusyJobs.has(job.job_id)"
+            @click.stop="retryDiscoverJob(job.job_id)"
+          >
+            {{ discoverBusyJobs.has(job.job_id) ? '处理中...' : '重试' }}
+          </button>
+          <button
+            v-if="canCancel(job.status)"
+            class="btn-tiny btn-tiny--danger"
+            :disabled="discoverBusyJobs.has(job.job_id)"
+            @click.stop="cancelDiscoverJob(job.job_id)"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </article>
+
+    <!-- Job detail drawer (P4 step 9, 2026-04-17). Overlay + slide-in
+         panel. Opens when a job row is clicked; closes on backdrop click
+         or Esc. Shows the full job record plus a funnel breakdown so
+         operators can see "why was this partial?" without SSHing to
+         grep discover-jobs.json. -->
+    <div
+      v-if="jobDrawerOpen"
+      class="job-drawer-backdrop"
+      @click="closeJobDrawer"
+    >
+      <aside
+        class="job-drawer-panel"
+        role="dialog"
+        aria-label="Discover job detail"
+        @click.stop
+      >
+        <div class="jd-head">
+          <div class="jd-title">
+            Discover Job
+            <span class="jd-head-id">{{ selectedJobId }}</span>
+          </div>
+          <button class="jd-close" @click="closeJobDrawer">×</button>
+        </div>
+
+        <div v-if="jobDetailLoading" class="jd-body"><em>加载中...</em></div>
+
+        <div v-else-if="!selectedJobDetail" class="jd-body">
+          <div class="jd-error">未找到任务或已被清理。</div>
+        </div>
+
+        <div v-else class="jd-body">
+          <!-- Status + essentials -->
+          <section class="jd-section">
+            <dl class="jd-grid">
+              <dt>状态</dt>
+              <dd>
+                <span
+                  :class="['dj-status', `dj-status--${selectedJobDetail.status}`]"
+                >{{ discoverStatusLabel(selectedJobDetail.status) }}</span>
+              </dd>
+              <dt>主题</dt>
+              <dd>{{ selectedJobDetail.theme_id || '—' }}</dd>
+              <dt>触发项目</dt>
+              <dd>{{ selectedJobDetail.trigger_project_id || '—' }}</dd>
+              <dt>触发 run</dt>
+              <dd>{{ selectedJobDetail.origin_run_id || '—' }}</dd>
+              <dt>尝试次数</dt>
+              <dd>{{ selectedJobDetail.attempt_count }} / {{ selectedJobDetail.max_attempts }}</dd>
+              <dt>创建</dt>
+              <dd>{{ shortDateTime(selectedJobDetail.created_at) }}</dd>
+              <dt>开始</dt>
+              <dd>{{ shortDateTime(selectedJobDetail.started_at) || '—' }}</dd>
+              <dt>结束</dt>
+              <dd>{{ shortDateTime(selectedJobDetail.finished_at) || '—' }}</dd>
+              <dt>心跳</dt>
+              <dd>{{ shortDateTime(selectedJobDetail.heartbeat_at) || '—' }}</dd>
+            </dl>
+          </section>
+
+          <!-- New entry ids (from the triggering article) -->
+          <section v-if="selectedJobDetail.new_entry_ids?.length" class="jd-section">
+            <h4 class="jd-section-title">本次新增概念（{{ selectedJobDetail.new_entry_ids.length }}）</h4>
+            <div class="jd-entry-list">
+              <code v-for="eid in selectedJobDetail.new_entry_ids" :key="eid" class="jd-entry-chip">{{ eid }}</code>
+            </div>
+          </section>
+
+          <!-- Funnel -->
+          <section v-if="selectedJobFunnel" class="jd-section">
+            <h4 class="jd-section-title">候选漏斗</h4>
+            <dl class="jd-grid jd-grid--funnel">
+              <dt>原始 pair</dt>
+              <dd>{{ selectedJobFunnel.raw_pairs || 0 }}</dd>
+              <dt>增量过滤后</dt>
+              <dd>{{ selectedJobFunnel.after_incremental_gate || 0 }}</dd>
+              <dt>跨文章后</dt>
+              <dd>{{ selectedJobFunnel.after_cross_article || 0 }}</dd>
+              <dt>去重后</dt>
+              <dd>{{ selectedJobFunnel.after_dedupe_filter || 0 }}</dd>
+              <dt>送 LLM</dt>
+              <dd>{{ selectedJobFunnel.sent_to_llm || 0 }}</dd>
+              <dt>LLM 接受</dt>
+              <dd>{{ selectedJobFunnel.llm_accepted || 0 }}</dd>
+              <dt>落库去重</dt>
+              <dd>{{ selectedJobFunnel.deduped_on_commit || 0 }}</dd>
+              <dt>最终写入</dt>
+              <dd><strong>{{ selectedJobFunnel.committed || 0 }}</strong></dd>
+            </dl>
+          </section>
+
+          <!-- Chunk / retry stats -->
+          <section v-if="selectedJobStats" class="jd-section">
+            <h4 class="jd-section-title">分片与重试</h4>
+            <dl class="jd-grid">
+              <dt>Chunk 总数</dt>
+              <dd>{{ selectedJobStats.llm_chunks_total || 0 }}</dd>
+              <dt>Chunk 成功</dt>
+              <dd>{{ selectedJobStats.llm_chunks_succeeded || 0 }}</dd>
+              <dt>Chunk 失败</dt>
+              <dd>{{ selectedJobStats.llm_chunks_failed || 0 }}</dd>
+              <dt>Chunk 重试</dt>
+              <dd>{{ selectedJobStats.llm_chunks_retried || 0 }}</dd>
+            </dl>
+          </section>
+
+          <!-- Raw errors -->
+          <section v-if="(selectedJobStats?.errors || []).length" class="jd-section">
+            <h4 class="jd-section-title">错误（{{ selectedJobStats.errors.length }}）</h4>
+            <pre class="jd-errors">{{ (selectedJobStats.errors || []).join('\n') }}</pre>
+          </section>
+
+          <section v-if="selectedJobDetail.last_error" class="jd-section">
+            <h4 class="jd-section-title">最后一次错误</h4>
+            <div class="jd-last-error">{{ selectedJobDetail.last_error }}</div>
+          </section>
+        </div>
+      </aside>
+    </div>
+
     <!-- Add URL form -->
     <article class="action-card">
       <div class="card-title">加入新 URL</div>
@@ -145,6 +382,7 @@
             :style="{ width: (activeTaskSnapshot.progress || 0) + '%' }"
           ></div>
         </div>
+        <div v-if="inFlightUrl" class="live-url">{{ inFlightUrl }}</div>
         <div class="live-message">{{ activeTaskSnapshot.message || '准备中...' }}</div>
         <div class="live-meta">
           任务 {{ shortTaskId(activeTaskSnapshot.task_id) }}
@@ -189,14 +427,14 @@
           >
             <button
               class="btn-bucket btn-bucket-retry"
-              :disabled="bulkBusy"
+              :disabled="!!bulkBusy"
               @click="retryAllErrored"
             >
               {{ bulkBusy === 'retry' ? '重试中...' : '一键重试失败' }}
             </button>
             <button
               class="btn-bucket btn-bucket-clear"
-              :disabled="bulkBusy"
+              :disabled="!!bulkBusy"
               @click="clearAllErrored"
             >
               {{ bulkBusy === 'clear' ? '清空中...' : '清空失败' }}
@@ -216,11 +454,31 @@
             <div class="bucket-meta">
               <template v-if="item.project_id">项目 {{ item.project_id }}</template>
               <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
-              <template v-if="item.phase"> · 阶段 {{ item.phase }}</template>
               <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
               <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
             </div>
+            <!-- In-flight: show phase as a prominent badge -->
+            <div v-if="bucket.key === 'in_flight' && item.phase" class="phase-badge-row">
+              <span class="phase-badge">{{ item.phase }}</span>
+            </div>
             <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+            <!-- Pending: cancel button -->
+            <div v-if="bucket.key === 'pending'" class="bucket-actions">
+              <button
+                class="btn-cancel"
+                :disabled="cancelingFingerprints.has(item.url_fingerprint)"
+                @click="cancelPending(item)"
+              >
+                {{ cancelingFingerprints.has(item.url_fingerprint) ? '取消中...' : '取消' }}
+              </button>
+              <span
+                v-if="cancelResults[item.url_fingerprint]"
+                :class="['retry-note', cancelResults[item.url_fingerprint].kind]"
+              >
+                {{ cancelResults[item.url_fingerprint].text }}
+              </span>
+            </div>
+            <!-- Errored: retry button -->
             <div v-if="bucket.key === 'errored'" class="bucket-actions">
               <button
                 class="btn-retry"
@@ -276,6 +534,82 @@ const newUrl = ref('')
 const addResult = ref(null)
 const runResult = ref(null)
 
+// Discover V2 queue state (P1.4). Polled alongside the URL queue so the
+// counts stay fresh. Separate refs from the URL buckets because the two
+// queues are different workloads (URL = article lifecycle, discover =
+// enrich) and we don't want a slow /discover-jobs/stats call to block
+// /pending-urls or vice versa.
+const discoverStats = ref({ total: 0, by_status: {} })
+const discoverRunning = ref(false)
+const discoverLastResult = ref(null)
+const discoverJobs = ref([])
+// Throttle alert data (P4 audit follow-up 2026-04-17). `latest` is the
+// most-recent skip entry; `by_kind` drives the breakdown chips; `total`
+// gates the whole alert's visibility.
+const discoverSkips = ref({ total: 0, by_kind: {}, latest: null })
+// Set of job_ids currently being retried/cancelled so we can disable
+// that specific row's buttons without disabling every other job's row.
+const discoverBusyJobs = ref(new Set())
+
+// Job detail drawer (P4 step 9). Keep identity + payload in separate
+// refs so the overlay renders immediately with a loading state while
+// the fetch is in flight.
+const jobDrawerOpen = ref(false)
+const selectedJobId = ref('')
+const selectedJobDetail = ref(null)
+const jobDetailLoading = ref(false)
+
+// Funnel + per-run stats are nested inside the job's ``stats`` field —
+// computed helpers so the template stays readable.
+const selectedJobFunnel = computed(() => selectedJobDetail.value?.stats?.funnel || null)
+const selectedJobStats = computed(() => selectedJobDetail.value?.stats || null)
+
+function shortDateTime(iso) {
+  if (!iso) return ''
+  return String(iso).replace('T', ' ').slice(0, 16)
+}
+
+// Only surface non-completed jobs in the per-job list. Completed ones are
+// already visible in the counter total; listing them would bury the
+// retriable partial/failed jobs a user actually needs to see.
+const DISCOVER_ATTENTION_STATUSES = new Set([
+  'pending',
+  'running',
+  'partial',
+  'failed',
+  'cancelled',
+])
+const discoverAttentionJobs = computed(() =>
+  discoverJobs.value.filter((j) => DISCOVER_ATTENTION_STATUSES.has(j.status)),
+)
+
+function discoverStatusLabel(status) {
+  const map = {
+    pending: '待办',
+    running: '运行中',
+    partial: '部分完成',
+    failed: '失败',
+    cancelled: '已取消',
+    completed: '完成',
+  }
+  return map[status] || status
+}
+
+function canRetry(status) {
+  return status === 'partial' || status === 'failed' || status === 'cancelled'
+}
+
+function canCancel(status) {
+  // Running can't be cancelled mid-LLM — the backend enforces this too.
+  return status === 'pending'
+}
+
+function shortJobId(id) {
+  if (!id) return ''
+  // djob_3942d1e9b7 -> djob_3942d1…
+  return id.length > 12 ? `${id.slice(0, 12)}…` : id
+}
+
 // LLM 抽取模式状态 (2026-04-11)
 const mode = ref({
   loading: true,
@@ -293,6 +627,8 @@ const activeTaskSnapshot = ref(null)
 // or error feedback that disappears after the next refresh).
 const retryingFingerprints = ref(new Set())
 const retryResults = ref({})
+const cancelingFingerprints = ref(new Set())
+const cancelResults = ref({})
 // Bulk operations on the errored bucket: "retry all" / "clear". Only one
 // of these runs at a time; `bulkBusy` is either '' | 'retry' | 'clear'.
 // `bulkResult` surfaces the API response as a colored one-liner below
@@ -333,6 +669,12 @@ const displayBuckets = computed(() => ({
 // the middle of a drain, otherwise the user will think "nothing is
 // happening" even though the backend is busy.
 const hasInFlightDrain = computed(() => buckets.value.in_flight.length > 0)
+
+// Show which URL is currently being processed in the live-progress panel.
+const inFlightUrl = computed(() => {
+  const item = buckets.value.in_flight[0]
+  return item?.url || item?.md_path || null
+})
 
 function itemKey(item) {
   return item.run_id || item.url_fingerprint || item.url || item.md_path || JSON.stringify(item)
@@ -390,6 +732,195 @@ async function loadQueue() {
   }
 }
 
+async function loadDiscoverStats() {
+  // Demo mode: show zeros instead of hitting the real backend. The URL
+  // queue has its own fixture via dataClient; discover-jobs doesn't have
+  // one yet, and demo mode's invariant is "no live service calls".
+  if (appMode.value === 'demo') {
+    discoverStats.value = { total: 0, by_status: {} }
+    return
+  }
+  // The response interceptor in api/index.js already unwraps axios to
+  // return the backend's {success, data, ...} envelope directly, so what
+  // we get here is {success:true, data:{by_status, total}} — i.e. the
+  // payload lives at res.data (ONE level), not res.data.data.
+  // Silent on error — the panel is informational, and the backend may be
+  // a version that doesn't have /api/auto/discover-jobs/stats yet.
+  try {
+    const res = await service({
+      url: '/api/auto/discover-jobs/stats',
+      method: 'GET',
+    })
+    const d = (res && res.data) || {}
+    discoverStats.value = {
+      total: d.total || 0,
+      by_status: d.by_status || {},
+    }
+  } catch (_e) {
+    // keep the last good value; don't flash zeros on a transient error
+  }
+}
+
+async function loadDiscoverJobs() {
+  if (appMode.value === 'demo') {
+    discoverJobs.value = []
+    return
+  }
+  try {
+    const res = await service({
+      url: '/api/auto/discover-jobs?limit=20',
+      method: 'GET',
+    })
+    const d = (res && res.data) || {}
+    discoverJobs.value = d.jobs || []
+  } catch (_e) {
+    // keep last good value
+  }
+}
+
+async function loadDiscoverSkips() {
+  if (appMode.value === 'demo') {
+    discoverSkips.value = { total: 0, by_kind: {}, latest: null }
+    return
+  }
+  try {
+    const res = await service({
+      url: '/api/auto/discover-jobs/recent-skips?within_seconds=3600&limit=5',
+      method: 'GET',
+    })
+    const d = (res && res.data) || {}
+    const skips = d.skips || []
+    const stats = d.stats || { total: 0, by_kind: {} }
+    discoverSkips.value = {
+      total: stats.total || 0,
+      by_kind: stats.by_kind || {},
+      latest: skips[0] || null,
+    }
+  } catch (_e) {
+    // keep last good value; don't flash alerts on network blips
+  }
+}
+
+async function refreshDiscover() {
+  await Promise.all([
+    loadDiscoverStats(),
+    loadDiscoverJobs(),
+    loadDiscoverSkips(),
+  ])
+}
+
+async function retryDiscoverJob(jobId) {
+  const busy = new Set(discoverBusyJobs.value)
+  busy.add(jobId)
+  discoverBusyJobs.value = busy
+  try {
+    await service({
+      url: `/api/auto/discover-jobs/${jobId}/retry`,
+      method: 'POST',
+    })
+    discoverLastResult.value = {
+      kind: 'ok',
+      text: `${shortJobId(jobId)} 已重新入队`,
+    }
+  } catch (e) {
+    discoverLastResult.value = {
+      kind: 'err',
+      text: `重试失败：${(e && e.message) || e}`,
+    }
+  } finally {
+    const next = new Set(discoverBusyJobs.value)
+    next.delete(jobId)
+    discoverBusyJobs.value = next
+    await refreshDiscover()
+  }
+}
+
+async function openJobDrawer(jobId) {
+  selectedJobId.value = jobId
+  jobDrawerOpen.value = true
+  selectedJobDetail.value = null
+  jobDetailLoading.value = true
+  try {
+    const res = await service({
+      url: `/api/auto/discover-jobs/${encodeURIComponent(jobId)}`,
+      method: 'GET',
+    })
+    selectedJobDetail.value = (res && res.data) || null
+  } catch (_e) {
+    selectedJobDetail.value = null
+  } finally {
+    jobDetailLoading.value = false
+  }
+}
+
+function closeJobDrawer() {
+  jobDrawerOpen.value = false
+  selectedJobId.value = ''
+  selectedJobDetail.value = null
+}
+
+function handleDrawerEsc(e) {
+  if (e.key === 'Escape' && jobDrawerOpen.value) {
+    closeJobDrawer()
+  }
+}
+
+async function cancelDiscoverJob(jobId) {
+  const busy = new Set(discoverBusyJobs.value)
+  busy.add(jobId)
+  discoverBusyJobs.value = busy
+  try {
+    await service({
+      url: `/api/auto/discover-jobs/${jobId}/cancel`,
+      method: 'POST',
+    })
+    discoverLastResult.value = {
+      kind: 'ok',
+      text: `${shortJobId(jobId)} 已取消`,
+    }
+  } catch (e) {
+    discoverLastResult.value = {
+      kind: 'err',
+      text: `取消失败：${(e && e.message) || e}`,
+    }
+  } finally {
+    const next = new Set(discoverBusyJobs.value)
+    next.delete(jobId)
+    discoverBusyJobs.value = next
+    await refreshDiscover()
+  }
+}
+
+async function runOneDiscover() {
+  discoverRunning.value = true
+  discoverLastResult.value = null
+  try {
+    const res = await service({
+      url: '/api/auto/discover-jobs/run-once',
+      method: 'POST',
+    })
+    const d = (res && res.data) || {}
+    if (!d.executed) {
+      discoverLastResult.value = { kind: 'info', text: '队列为空' }
+    } else {
+      const outcome = d.outcome || {}
+      const discovered = (outcome.stats || {}).discovered || 0
+      discoverLastResult.value = {
+        kind: outcome.status === 'failed' ? 'err' : 'ok',
+        text: `${outcome.job_id} → ${outcome.status}（新增关系 ${discovered}）`,
+      }
+    }
+  } catch (e) {
+    discoverLastResult.value = {
+      kind: 'err',
+      text: '运行失败：' + ((e && e.message) || e),
+    }
+  } finally {
+    discoverRunning.value = false
+    await refreshDiscover()
+  }
+}
+
 // Gap #11 fix: fetch the freshest build task snapshot so we can show
 // progress % / current chunk / message while the drain is running.
 // Silent on error — this is progress UI, not a critical path.
@@ -432,6 +963,7 @@ function startPoll() {
     // labels don't go stale when the backend is restarted or .env is
     // tuned mid-session. Silent on error — the card is informational.
     await loadMode()
+    await refreshDiscover()
   }, 6000)
 }
 
@@ -443,7 +975,10 @@ function stopPoll() {
   activeTaskSnapshot.value = null
 }
 
-onUnmounted(stopPoll)
+onUnmounted(() => {
+  stopPoll()
+  window.removeEventListener('keyup', handleDrawerEsc)
+})
 
 async function addUrl() {
   const url = newUrl.value.trim()
@@ -544,6 +1079,42 @@ async function retryErrored(item) {
     const next = new Set(retryingFingerprints.value)
     next.delete(fp)
     retryingFingerprints.value = next
+  }
+}
+
+async function cancelPending(item) {
+  const fp = item?.url_fingerprint
+  if (!fp) return
+  if (cancelingFingerprints.value.has(fp)) return
+  cancelingFingerprints.value = new Set([...cancelingFingerprints.value, fp])
+  try {
+    await service({
+      url: `/api/auto/pending-urls/${fp}`,
+      method: 'delete',
+    })
+    cancelResults.value = {
+      ...cancelResults.value,
+      [fp]: { kind: 'ok', text: '已取消' },
+    }
+    await loadQueue()
+  } catch (e) {
+    const resp = e.response?.data || {}
+    const status = e.response?.status
+    let text
+    let kind = 'err'
+    if (status === 409) {
+      kind = 'warn'
+      text = resp.error || '该任务已开始执行，无法取消'
+    } else if (status === 404) {
+      text = resp.error || '该任务已不在待处理列表中'
+    } else {
+      text = resp.error || e.message || '取消失败'
+    }
+    cancelResults.value = { ...cancelResults.value, [fp]: { kind, text } }
+  } finally {
+    const next = new Set(cancelingFingerprints.value)
+    next.delete(fp)
+    cancelingFingerprints.value = next
   }
 }
 
@@ -684,14 +1255,17 @@ onMounted(async () => {
   await loadQueue()
   await refreshActiveTask()
   await loadMode()
+  await refreshDiscover()
   startPoll()
+  window.addEventListener('keyup', handleDrawerEsc)
 })
 
-// Re-hydrate all three pipeline reads when live/demo flips.
+// Re-hydrate all pipeline reads when live/demo flips.
 watch(appMode, async () => {
   await loadQueue()
   await refreshActiveTask()
   await loadMode()
+  await refreshDiscover()
 })
 </script>
 
@@ -713,6 +1287,207 @@ watch(appMode, async () => {
 .mini-copy { font-size: 13px; margin: 6px 0 12px; }
 
 .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+
+.discover-card { margin-bottom: 20px; }
+.discover-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
+.discover-total { color: #5a6573; font-size: 12px; }
+.discover-counts {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin: 6px 0 12px;
+}
+.dc-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #e3e9f2;
+}
+.dc-label { font-size: 12px; color: #5a6573; }
+.dc-value { font-size: 22px; font-weight: 700; color: #1b1712; }
+.dc-value--warn { color: #c45a4a; }
+.discover-actions { align-items: center; }
+
+/* Throttle alert (P4 audit follow-up 2026-04-17). Subtle amber strip so
+   it reads as "we're rate-limiting you on purpose" rather than "broken". */
+.discover-skip-alert {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff8eb;
+  border: 1px solid #f0d27a;
+  color: #7a5620;
+  font-size: 12px;
+}
+.skip-alert-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.skip-alert-icon { font-size: 14px; }
+.skip-alert-breakdown { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.skip-chip {
+  background: #faeac0;
+  color: #7a5620;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.skip-alert-latest {
+  margin-top: 6px;
+  color: #5a4420;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discover-jobs { margin-top: 14px; border-top: 1px solid #e3e9f2; padding-top: 12px; }
+.discover-jobs-title { font-size: 12px; color: #5a6573; margin-bottom: 8px; }
+.discover-job-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #e3e9f2;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.dj-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dj-status--pending { background: #eef2f8; color: #4a6fa5; }
+.dj-status--running { background: #e7f3ec; color: #2d7a47; }
+.dj-status--partial { background: #fbeed7; color: #a86d12; }
+.dj-status--failed { background: #fbe4e0; color: #c45a4a; }
+.dj-status--cancelled { background: #eeeeee; color: #777; }
+.dj-id { font-family: 'SFMono-Regular', Menlo, monospace; color: #5a6573; font-size: 12px; }
+.dj-error {
+  color: #c45a4a;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
+}
+.dj-meta { color: #5a6573; font-size: 12px; }
+.dj-spacer { flex: 1; }
+.btn-tiny {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid #4a6fa5;
+  background: #fff;
+  color: #4a6fa5;
+  cursor: pointer;
+}
+.btn-tiny:hover:not(:disabled) { background: #4a6fa5; color: #fff; }
+.btn-tiny:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-tiny--danger { border-color: #c45a4a; color: #c45a4a; }
+.btn-tiny--danger:hover:not(:disabled) { background: #c45a4a; color: #fff; }
+
+/* --- Job detail drawer (P4 step 9, 2026-04-17) ------------------------ */
+.discover-job-row--clickable { cursor: pointer; }
+.discover-job-row--clickable:hover { background: #f5f8ff; }
+
+.job-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(27, 23, 18, 0.45);
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
+}
+.job-drawer-panel {
+  width: min(560px, 90vw);
+  max-width: 560px;
+  height: 100vh;
+  background: #fcfdff;
+  border-left: 1px solid #d4dce8;
+  overflow-y: auto;
+  box-shadow: -10px 0 30px rgba(27, 23, 18, 0.15);
+}
+.jd-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid #e3e9f2;
+  background: #f5f8ff;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.jd-title { font-weight: 700; color: #211c18; font-size: 14px; }
+.jd-head-id {
+  font-family: 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+  color: #5a6573;
+  margin-left: 10px;
+  font-weight: 400;
+}
+.jd-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  line-height: 1;
+  color: #5a6573;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.jd-close:hover { color: #211c18; }
+.jd-body { padding: 16px 20px 40px; }
+.jd-error { color: #c45a4a; }
+.jd-section { margin-bottom: 18px; }
+.jd-section-title {
+  font-size: 12px;
+  color: #5a6573;
+  font-weight: 600;
+  margin: 0 0 8px;
+  letter-spacing: 0.02em;
+}
+.jd-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.jd-grid dt { color: #5a6573; }
+.jd-grid dd { margin: 0; color: #211c18; font-family: inherit; }
+.jd-grid--funnel { grid-template-columns: 110px 1fr; }
+.jd-entry-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.jd-entry-chip {
+  font-family: 'SFMono-Regular', Menlo, monospace;
+  font-size: 11px;
+  background: #eef2f8;
+  color: #4a6fa5;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.jd-errors {
+  font-family: 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+  background: #fff8f6;
+  border: 1px solid #e2b0a8;
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #8f3a2b;
+}
+.jd-last-error {
+  color: #c45a4a;
+  font-size: 13px;
+}
 .card, .action-card, .bucket-card, .state-card {
   border: 1px solid #d4dce8;
   background: linear-gradient(180deg, #fcfdff 0%, #f5f8ff 100%);
@@ -818,8 +1593,16 @@ watch(appMode, async () => {
   background: linear-gradient(90deg, #7c3aed 0%, #a855f7 100%);
   transition: width 400ms ease;
 }
-.live-message {
+.live-url {
   margin-top: 8px;
+  font-size: 12px;
+  color: #6d28d9;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  word-break: break-all;
+  opacity: 0.9;
+}
+.live-message {
+  margin-top: 6px;
   font-size: 13px;
   color: #5b21b6;
 }
@@ -910,10 +1693,37 @@ watch(appMode, async () => {
   color: #fff;
 }
 .btn-retry:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-cancel {
+  border: 1px solid #888;
+  background: #fff;
+  color: #555;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 120ms ease;
+}
+.btn-cancel:hover:not(:disabled) { background: #555; border-color: #555; color: #fff; }
+.btn-cancel:disabled { opacity: 0.55; cursor: not-allowed; }
 .retry-note { font-size: 12px; }
 .retry-note.ok { color: #2e7d32; }
 .retry-note.warn { color: #e65100; }
 .retry-note.err { color: #c62828; }
+.phase-badge-row { margin-top: 5px; }
+.phase-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  background: #e0e7ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+  letter-spacing: 0.03em;
+}
 .empty-note { color: #7a8090; font-size: 13px; padding: 8px 0; }
 
 .nav-row { margin-top: 24px; display: flex; gap: 12px; }

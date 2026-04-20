@@ -1163,6 +1163,8 @@ class GraphBuilderService:
     使用 Graphiti + Neo4j 本地构建知识图谱
     """
 
+    _indices_initialized = False
+
     def __init__(self, api_key: Optional[str] = None):
         """
         初始化图谱构建服务
@@ -1246,7 +1248,13 @@ class GraphBuilderService:
                 embedder=embedder,
             )
             self._client_snapshot = snapshot
-            await self._client.build_indices_and_constraints()
+            if not type(self)._indices_initialized:
+                try:
+                    await self._client.build_indices_and_constraints()
+                except Exception as exc:
+                    logger.warning("Graphiti 索引初始化失败（继续构建）: %s", exc)
+                else:
+                    type(self)._indices_initialized = True
             logger.info(
                 "Graphiti 客户端初始化完成 mode=%s provider=%s model=%s base_url=%s semaphore=%s",
                 params['mode'],
@@ -1297,6 +1305,12 @@ class GraphBuilderService:
             from pydantic import Field as PydanticField
             attrs = {"__doc__": description, "__annotations__": {}}
             for attr_def in entity_def.get("attributes", []):
+                if not isinstance(attr_def, dict):
+                    logger.warning("Skipping malformed entity attribute for %s: %r", name, attr_def)
+                    continue
+                if not attr_def.get("name"):
+                    logger.warning("Skipping nameless entity attribute for %s: %r", name, attr_def)
+                    continue
                 attr_name = attr_def["name"]
                 # 跳过保留字
                 if attr_name.lower() in {'uuid', 'name', 'group_id', 'name_embedding', 'summary', 'created_at'}:
@@ -1324,6 +1338,9 @@ class GraphBuilderService:
         for edge_def in ontology.get("edge_types", []):
             edge_name = edge_def["name"]
             for st in edge_def.get("source_targets", []):
+                if not isinstance(st, dict):
+                    logger.warning("Skipping malformed edge source_target for %s: %r", edge_name, st)
+                    continue
                 source = st.get("source", "")
                 target = st.get("target", "")
                 if source and target:

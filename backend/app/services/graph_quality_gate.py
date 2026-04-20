@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..utils.llm_client import LLMClient
 
@@ -380,6 +380,7 @@ class GraphQualityGate:
         *,
         graph_data: Dict[str, Any],
         document_text: str,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, str]:
         """为空 summary 的节点批量生成描述。返回 {node_name: summary}。"""
         nodes = graph_data.get("nodes", [])
@@ -401,23 +402,39 @@ class GraphQualityGate:
             return {}
 
         logger.info("发现 %d 个空 summary 节点，开始回填", len(empty_nodes))
+        total_requested = len(empty_nodes)
+        batches = list(self._iter_summary_batches(empty_nodes))
+        total_batches = len(batches)
         result: Dict[str, str] = {}
-        for batch in self._iter_summary_batches(empty_nodes):
+        for batch_index, batch in enumerate(batches, start=1):
             batch_result = self._request_summary_batch(
                 nodes=batch,
                 document_text=document_text,
             )
             result.update(batch_result)
+            if progress_callback is not None:
+                progress_callback(
+                    "回填节点摘要... "
+                    f"批次 {batch_index}/{max(total_batches, 1)} "
+                    f"（已生成 {len(result)}/{total_requested} 个）"
+                )
 
         remaining_nodes = [node for node in empty_nodes if node["name"] not in result]
         if remaining_nodes:
             logger.warning("summary 首轮回填后仍缺失 %d 个节点，开始逐个补充", len(remaining_nodes))
-            for node in remaining_nodes:
+            retry_total = len(remaining_nodes)
+            for retry_index, node in enumerate(remaining_nodes, start=1):
                 node_result = self._request_summary_batch(
                     nodes=[node],
                     document_text=document_text,
                 )
                 result.update(node_result)
+                if progress_callback is not None:
+                    progress_callback(
+                        "回填节点摘要... "
+                        f"补充 {retry_index}/{retry_total} "
+                        f"（已生成 {len(result)}/{total_requested} 个）"
+                    )
 
         missing_names = [node["name"] for node in empty_nodes if node["name"] not in result]
         self.last_summary_backfill_meta = {
@@ -477,11 +494,21 @@ class GraphQualityGate:
             logger.warning("summary 回填 LLM 调用失败: %s", exc)
             return {}
 
+        allowed_names = {
+            str(node.get("name", "")).strip()
+            for node in nodes
+            if str(node.get("name", "")).strip()
+        }
         result: Dict[str, str] = {}
         for item in raw.get("summaries", []):
             name = str(item.get("name", "")).strip()
             summary = str(item.get("summary", "")).strip()
-            if name and summary and summary != "（待补充）":
+            if (
+                name
+                and name in allowed_names
+                and summary
+                and summary != "（待补充）"
+            ):
                 result[name] = summary
 
         logger.info("summary 回填批次完成: %d/%d 个节点", len(result), len(nodes))

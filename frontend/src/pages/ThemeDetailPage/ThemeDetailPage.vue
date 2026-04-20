@@ -31,6 +31,40 @@
           {{ discoverResult }}
         </div>
 
+        <!-- Discover V2 theme-scoped status panel (P4 step 8, 2026-04-17).
+             Collapses silently when nothing has ever run against this
+             theme, so the sidebar stays clean for brand-new themes. -->
+        <section
+          v-if="themeDiscover.stats.total > 0 || themeDiscover.history.length > 0"
+          class="td-discover-panel"
+        >
+          <div class="td-discover-panel-title">Discover 队列（本主题）</div>
+
+          <!-- Per-status counts -->
+          <div class="td-discover-status-row">
+            <span
+              v-for="(count, status) in themeDiscover.stats.by_status"
+              :key="status"
+              :class="['td-ds-badge', `td-ds-badge--${status}`]"
+            >{{ discoverStatusLabel(status) }} {{ count }}</span>
+          </div>
+
+          <!-- Most-recent history entries -->
+          <div v-if="themeDiscover.history.length > 0" class="td-discover-history">
+            <div class="td-discover-history-title">近 {{ Math.min(themeDiscover.history.length, 5) }} 次发现</div>
+            <div
+              v-for="entry in themeDiscover.history.slice(0, 5)"
+              :key="(entry.job_id || '') + entry.run_at"
+              class="td-discover-history-row"
+            >
+              <span class="td-ds-when">{{ shortDateTime(entry.run_at) }}</span>
+              <span class="td-ds-gained">+{{ entry.discovered }} 关系</span>
+              <span v-if="entry.errors_count" class="td-ds-errors">· {{ entry.errors_count }} 错</span>
+              <span class="td-ds-job" :title="entry.job_id">{{ shortJobId(entry.job_id) }}</span>
+            </div>
+          </div>
+        </section>
+
         <!-- Concept group nav -->
         <nav class="td-group-nav">
           <div class="td-group-nav-title">概念分组</div>
@@ -289,6 +323,10 @@ import CrossRelationCard from '../../components/CrossRelationCard.vue'
 import { getThemePanorama } from '../../data/dataClient'
 import { discoverCrossRelations, updateCrossRelation, deleteCrossRelation } from '../../services/api/registryApi'
 import { appMode } from '../../runtime/appMode'
+// Raw axios for the live-only Discover V2 endpoint. The api/index.js
+// response interceptor already unwraps to the backend envelope — so what
+// we get back is {success, data, ...}. Payload lives at ONE level down.
+import service from '../../api/index'
 
 const route = useRoute()
 const props = defineProps({ themeId: String })
@@ -300,6 +338,11 @@ const activeTab = ref('groups')
 const scrollTarget = ref('')
 const discovering = ref(false)
 const discoverResult = ref('')
+
+// Discover V2 — theme-scoped status aggregate (P4 step 8). Fetched
+// alongside the panorama so the sidebar can surface history + jobs +
+// funnel trend without user action. Demo mode skips the fetch.
+const themeDiscover = ref({ coverage: {}, history: [], jobs: [], stats: { total: 0, by_status: {} } })
 
 const tabs = [
   { key: 'groups', label: '概念分组' },
@@ -426,6 +469,57 @@ async function loadPanorama() {
   } finally {
     loading.value = false
   }
+  // Fire-and-forget the theme-scoped discover aggregate. Independent of
+  // the panorama fetch so a slow/missing discover endpoint never holds
+  // up the rest of the page.
+  loadThemeDiscover(tid)
+}
+
+async function loadThemeDiscover(themeId) {
+  // Demo mode: clear to empty so stale live data doesn't leak into the
+  // demo view. Real backend has no demo fixture for discover-jobs yet.
+  if (appMode.value === 'demo') {
+    themeDiscover.value = { coverage: {}, history: [], jobs: [], stats: { total: 0, by_status: {} } }
+    return
+  }
+  try {
+    const res = await service({
+      url: `/api/auto/discover-jobs/by-theme/${encodeURIComponent(themeId)}`,
+      method: 'GET',
+    })
+    const d = (res && res.data) || {}
+    themeDiscover.value = {
+      coverage: d.coverage || {},
+      history: d.history || [],
+      jobs: d.jobs || [],
+      stats: d.stats || { total: 0, by_status: {} },
+    }
+  } catch (_e) {
+    // Informational panel — don't surface the error, just keep last good.
+  }
+}
+
+function discoverStatusLabel(status) {
+  const map = {
+    pending: '待办',
+    running: '运行中',
+    completed: '完成',
+    partial: '部分完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }
+  return map[status] || status
+}
+
+function shortJobId(id) {
+  if (!id) return ''
+  return id.length > 14 ? `${id.slice(0, 14)}…` : id
+}
+
+function shortDateTime(iso) {
+  if (!iso) return ''
+  // Incoming: "2026-04-17T13:42:11" — strip seconds for denser display.
+  return iso.replace('T', ' ').slice(0, 16)
 }
 
 function scrollTo(group) {
@@ -514,6 +608,60 @@ watch(appMode, loadPanorama)
 .td-discover-btn:hover:not(:disabled) { background: #3b5998; }
 .td-discover-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .td-discover-result { font-size: 12px; color: #059669; margin-bottom: 16px; }
+
+/* Discover V2 status panel (P4 step 8). Lives in the sidebar below the
+   one-shot discover button. Keep typography quiet — it's an audit strip,
+   not a hero element. */
+.td-discover-panel {
+  margin: 12px 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fbfaf5;
+  border: 1px solid #e8e2d5;
+}
+.td-discover-panel-title {
+  font-size: 12px;
+  color: #5a6573;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.td-discover-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.td-ds-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #eef2f8;
+  color: #4a6fa5;
+}
+.td-ds-badge--running { background: #e7f3ec; color: #2d7a47; }
+.td-ds-badge--partial { background: #fbeed7; color: #a86d12; }
+.td-ds-badge--failed { background: #fbe4e0; color: #c45a4a; }
+.td-ds-badge--cancelled { background: #eeeeee; color: #777; }
+
+.td-discover-history-title {
+  font-size: 11px;
+  color: #7a7a7a;
+  margin-bottom: 4px;
+}
+.td-discover-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: #5a6573;
+  padding: 4px 0;
+  border-top: 1px dashed #eee5d0;
+}
+.td-discover-history-row:first-of-type { border-top: none; }
+.td-ds-when { color: #555; }
+.td-ds-gained { color: #2d7a47; font-weight: 500; }
+.td-ds-errors { color: #c45a4a; }
+.td-ds-job { font-family: 'SFMono-Regular', Menlo, monospace; color: #888; font-size: 10px; }
 
 .td-group-nav { margin-top: 20px; }
 .td-group-nav-title { font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }

@@ -65,6 +65,7 @@ def create_app(config_class=Config):
     # 注册蓝图
     from .api import graph_bp, simulation_bp, report_bp, review_bp, concept_bp, theme_bp, evolution_bp, registry_bp
     from .api.routes.auto_pipeline import auto_pipeline_bp
+    from .api.routes.discover_jobs import discover_jobs_bp
     from .api.routes.llm_mode_config import llm_mode_config_bp
     from .api.routes.vault import vault_bp
     from .api.routes.article_raw import article_raw_bp
@@ -76,8 +77,9 @@ def create_app(config_class=Config):
     app.register_blueprint(theme_bp, url_prefix='/api/theme')
     app.register_blueprint(evolution_bp, url_prefix='/api/evolution')
     app.register_blueprint(registry_bp, url_prefix='/api/registry')
-    # auto_pipeline_bp / llm_mode_config_bp / vault_bp / article_raw_bp 都自带 /api/* prefix
+    # auto_pipeline_bp / discover_jobs_bp / llm_mode_config_bp / vault_bp / article_raw_bp 都自带 /api/* prefix
     app.register_blueprint(auto_pipeline_bp)
+    app.register_blueprint(discover_jobs_bp)
     app.register_blueprint(llm_mode_config_bp)
     app.register_blueprint(vault_bp)
     app.register_blueprint(article_raw_bp)
@@ -87,7 +89,22 @@ def create_app(config_class=Config):
     def health():
         return {'status': 'ok', 'service': 'Knowledge Fabric Backend'}
     
+    # Discover V2 worker (P1.2): opt-in background daemon that drains the
+    # cross-concept discover job queue. Off by default so operators can
+    # deploy the scheduling change first and observe main-pipeline latency
+    # before flipping background execution on.
+    if os.environ.get("AUTO_START_DISCOVER_WORKER", "0") == "1":
+        try:
+            from .services.auto.discover_worker import start_global_worker
+
+            idle = float(os.environ.get("DISCOVER_WORKER_IDLE_SECONDS", "5"))
+            start_global_worker(idle_sleep_seconds=idle, recover_stale_on_start=True)
+            if should_log_startup:
+                logger.info(f"discover worker started (idle_sleep={idle}s)")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"failed to start discover worker: {exc}")
+
     if should_log_startup:
         logger.info("Knowledge Fabric Backend 启动完成")
-    
+
     return app

@@ -30,6 +30,7 @@ DEFAULT_NOTE_SUBDIR = "知识工作台/微信文章"
 DEFAULT_BUILD_CHUNK_SIZE = 900
 DEFAULT_BUILD_CHUNK_OVERLAP = 120
 READING_VIEW_SCREENSHOT_TIMEOUT_SECONDS = 90
+LONG_ARTICLE_WARN_THRESHOLD = 30000
 DEFAULT_SIMULATION_REQUIREMENT = (
     "请将这篇文章整理为知识工作台中的可阅读知识结构，优先抽取高价值实体与关系，"
     "输出适合阅读视图展示的主线骨架，并尽量保留问题、方案、架构、机制、技术、指标与案例。"
@@ -39,6 +40,7 @@ WECHAT_RATE_LIMIT_MARKERS = (
     "Verification Code",
 )
 FRONTMATTER_BLOCK_RE = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|$)", re.DOTALL)
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 
 
 @dataclass
@@ -190,6 +192,11 @@ def build_note_content(
     return "\n\n".join(section for section in sections if section).strip() + "\n"
 
 
+def _is_loopback_http_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return (parsed.hostname or "").strip().lower() in _LOOPBACK_HOSTS
+
+
 class ArticleWorkspacePipeline:
     def __init__(
         self,
@@ -214,6 +221,12 @@ class ArticleWorkspacePipeline:
         self.build_chunk_size = max(int(build_chunk_size or DEFAULT_BUILD_CHUNK_SIZE), 200)
         self.build_chunk_overlap = max(int(build_chunk_overlap or DEFAULT_BUILD_CHUNK_OVERLAP), 0)
         self.session = session or requests.Session()
+        # The desktop environment may export HTTP(S)_PROXY without NO_PROXY.
+        # For loopback backend calls that proxy can time out long requests
+        # (ontology/build) and return a false 503 while the local Flask
+        # handler keeps running. Force direct connections to the local backend.
+        if _is_loopback_http_url(self.backend_base_url) and hasattr(self.session, "trust_env"):
+            self.session.trust_env = False
         self.command_runner = command_runner or subprocess.run
         self.sleep_func = sleep_func or time.sleep
 
@@ -287,10 +300,9 @@ class ArticleWorkspacePipeline:
 
         project_url = build_project_url(project_id, self.frontend_base_url)
         reading_view_url = build_reading_view_url(project_id, self.frontend_base_url)
-        screenshot_path = str(note_path.with_suffix(".reading-view.png"))
-        screenshot_captured = self._capture_reading_view(reading_view_url, screenshot_path)
-        persisted_screenshot_path = screenshot_path if screenshot_captured else None
-
+        # Persist the durable project/read-view links before the optional
+        # screenshot step so a slow screenshot cannot leave the note in the
+        # pre-build placeholder state.
         self._write_note(
             note_path,
             title=title,
@@ -300,8 +312,24 @@ class ArticleWorkspacePipeline:
             project_url=project_url,
             project_id=project_id,
             graph_id=graph_id,
-            screenshot_path=persisted_screenshot_path,
+            screenshot_path=None,
         )
+        screenshot_path = str(note_path.with_suffix(".reading-view.png"))
+        screenshot_captured = self._capture_reading_view(reading_view_url, screenshot_path)
+        persisted_screenshot_path = screenshot_path if screenshot_captured else None
+
+        if persisted_screenshot_path:
+            self._write_note(
+                note_path,
+                title=title,
+                body_markdown=normalized_markdown,
+                source_url=source_url,
+                reading_view_url=reading_view_url,
+                project_url=project_url,
+                project_id=project_id,
+                graph_id=graph_id,
+                screenshot_path=persisted_screenshot_path,
+            )
 
         return ArticleWorkspaceResult(
             title=title,
@@ -350,6 +378,18 @@ class ArticleWorkspacePipeline:
 
         if len(stdout) < 200:
             raise RuntimeError("抓取结果过短，无法作为有效文章内容。")
+
+        if len(stdout) > LONG_ARTICLE_WARN_THRESHOLD:
+            import logging as _logging
+            _logging.getLogger("mirofish.article_workspace_pipeline").warning(
+                "长文告警：url=%s 抓取到 %d 字符，按 chunk_size=%d 预计 %d 块，"
+                "LLM 抽取可能耗时较长，watchdog 超时上限请检查 "
+                "AUTO_PIPELINE_TOTAL_TIMEOUT_SECONDS。",
+                url,
+                len(stdout),
+                DEFAULT_BUILD_CHUNK_SIZE,
+                max(1, len(stdout) // DEFAULT_BUILD_CHUNK_SIZE),
+            )
 
         return stdout
 

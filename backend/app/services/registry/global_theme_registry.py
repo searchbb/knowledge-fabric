@@ -29,6 +29,11 @@ logger = logging.getLogger("mirofish.theme_registry")
 
 _THEMES_FILENAME = "global_themes.json"
 
+# Cap on entries kept in ``theme["discovery_history"]``. Ten is enough to
+# see "is recall quality trending" without turning the themes JSON into a
+# log file. Raise with care — every entry carries a full funnel dict.
+_DISCOVERY_HISTORY_MAX = 10
+
 
 def _themes_path() -> str:
     projects_dir = os.path.join(Config.UPLOAD_FOLDER, "projects")
@@ -676,37 +681,86 @@ def record_discovery_run(
     theme_id: str,
     *,
     stats: dict[str, Any],
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     """Persist the latest discovery run's coverage stats on the theme.
 
     Used by ``cross_concept_discoverer.discover`` to make "我们已经找过了吗"
-    visible on the panorama endpoint. Stats retained:
+    visible on the panorama endpoint. Stats retained on ``discovery_coverage``:
 
     * ``candidates_count`` — how many candidate pairs the recall stage produced
     * ``discovered`` — how many new xrels were persisted
     * ``skipped`` — dedupe hits
     * ``errors_count`` — number of errors (bounded)
     * ``last_run_at`` — ISO timestamp
+
+    Additionally, a rolling ``discovery_history`` list (most-recent first,
+    capped at :data:`_DISCOVERY_HISTORY_MAX`) is appended per run with a
+    bounded subset of fields so Theme UI and future A/B dashboards can
+    diff funnel counts across runs without the raw stats blob bloating
+    the theme JSON. Each entry mirrors ``discovery_coverage`` plus the
+    whole ``funnel`` dict and the ``job_id``.
     """
     store = _load_themes()
     theme = store["themes"].get(theme_id)
     if not theme:
         raise GlobalThemeNotFoundError(f"主题不存在: {theme_id}")
 
+    now_iso = datetime.now().isoformat()
+    discovered = int(stats.get("discovered", 0) or 0)
+    candidates_count = int(stats.get("candidates_count", 0) or 0)
+    skipped = int(stats.get("skipped", 0) or 0)
+    errors_count = int(len(stats.get("errors", []) or []))
+    reason = str(stats.get("reason", "") or "")
+    funnel = stats.get("funnel") or {}
+
     coverage = dict(theme.get("discovery_coverage") or {})
     coverage.update({
-        "candidates_count": int(stats.get("candidates_count", 0) or 0),
-        "discovered": int(stats.get("discovered", 0) or 0),
-        "skipped": int(stats.get("skipped", 0) or 0),
-        "errors_count": int(len(stats.get("errors", []) or [])),
-        "last_run_at": datetime.now().isoformat(),
-        "reason": str(stats.get("reason", "") or ""),
+        "candidates_count": candidates_count,
+        "discovered": discovered,
+        "skipped": skipped,
+        "errors_count": errors_count,
+        "last_run_at": now_iso,
+        "reason": reason,
     })
     theme["discovery_coverage"] = coverage
-    theme["updated_at"] = datetime.now().isoformat()
+
+    # Rolling history (added P4 step 2, 2026-04-17). A minimal bounded
+    # record per run — NOT the raw stats blob, so model payloads and
+    # long error strings stay out of the themes JSON.
+    history_entry = {
+        "job_id": job_id,
+        "run_at": now_iso,
+        "discovered": discovered,
+        "candidates_count": candidates_count,
+        "skipped": skipped,
+        "errors_count": errors_count,
+        "reason": reason,
+        "funnel": dict(funnel) if isinstance(funnel, dict) else {},
+    }
+    history = list(theme.get("discovery_history") or [])
+    history.insert(0, history_entry)  # most-recent first
+    if len(history) > _DISCOVERY_HISTORY_MAX:
+        history = history[:_DISCOVERY_HISTORY_MAX]
+    theme["discovery_history"] = history
+
+    theme["updated_at"] = now_iso
     store["themes"][theme_id] = theme
     _save_themes(store)
     return coverage
+
+
+def get_discovery_history(theme_id: str) -> list[dict[str, Any]]:
+    """Return the theme's rolling discover history (most-recent first).
+
+    Raises :class:`GlobalThemeNotFoundError` for an unknown theme.
+    Returns ``[]`` for a theme that has never been discover-run.
+    """
+    store = _load_themes()
+    theme = store["themes"].get(theme_id)
+    if not theme:
+        raise GlobalThemeNotFoundError(f"主题不存在: {theme_id}")
+    return list(theme.get("discovery_history") or [])
 
 
 # ---------------------------------------------------------------------------

@@ -441,7 +441,10 @@ def build_graph():
         
         # 创建异步任务
         task_manager = TaskManager()
-        task_id = task_manager.create_task(f"构建图谱: {graph_name}")
+        task_id = task_manager.create_task(
+            f"构建图谱: {graph_name}",
+            metadata={"project_id": project_id},
+        )
         logger.info(f"创建图谱构建任务: task_id={task_id}, project_id={project_id}")
         
         # 更新项目状态
@@ -670,6 +673,11 @@ def build_graph():
 
                 # === 节点去重：合并名称高度相似的节点 ===
                 if provider == "local" and node_count > 0:
+                    task_manager.update_task(
+                        task_id,
+                        message="合并相似节点...",
+                        progress=95,
+                    )
                     try:
                         from ..services.graph_quality_gate import GraphQualityGate as _DedupGate
                         with stage("dedup_find_near_duplicates"):
@@ -694,13 +702,27 @@ def build_graph():
                     "summary_backfill_error": "",
                 }
                 if provider == "local" and node_count > 0:
+                    task_manager.update_task(
+                        task_id,
+                        message="回填节点摘要...",
+                        progress=96,
+                    )
                     try:
                         from ..services.graph_quality_gate import GraphQualityGate as _SummaryGate
                         _sg = _SummaryGate()
+
+                        def summary_progress_callback(message: str) -> None:
+                            task_manager.update_task(
+                                task_id,
+                                message=message,
+                                progress=96,
+                            )
+
                         with stage("summary_backfill"):
                             backfilled = _sg.backfill_summaries(
                                 graph_data=graph_data,
                                 document_text=text,
+                                progress_callback=summary_progress_callback,
                             )
                         meta = dict(getattr(_sg, "last_summary_backfill_meta", {}) or {})
                         summary_backfill_meta["summary_backfill_requested"] = max(
@@ -713,6 +735,11 @@ def build_graph():
                             meta.get("missing") or []
                         )
                         if backfilled:
+                            task_manager.update_task(
+                                task_id,
+                                message=f"写回节点摘要... {len(backfilled)} 个",
+                                progress=96,
+                            )
                             with stage("summary_write_neo4j", n_nodes=len(backfilled)):
                                 _write_summaries_to_neo4j(builder, graph_id, backfilled)
                             graph_data = builder.get_graph_data(graph_id)

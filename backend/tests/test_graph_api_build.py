@@ -175,7 +175,7 @@ class _NoopQualityGate:
     def find_near_duplicates(graph_data, threshold=0.70):
         return []
 
-    def backfill_summaries(self, *, graph_data, document_text):
+    def backfill_summaries(self, *, graph_data, document_text, progress_callback=None):
         return {}
 
 
@@ -211,8 +211,50 @@ class _PartialSummaryGate:
     def find_near_duplicates(graph_data, threshold=0.70):
         return []
 
-    def backfill_summaries(self, *, graph_data, document_text):
+    def backfill_summaries(self, *, graph_data, document_text, progress_callback=None):
         return {"节点A": "节点A摘要"}
+
+
+class _ProgressReportingSummaryGate:
+    def __init__(self):
+        self.last_summary_backfill_meta = {
+            "requested": 2,
+            "completed": 2,
+            "missing": [],
+        }
+
+    def assess(self, graph_data, ontology, document_text):
+        return type(
+            "_Assessment",
+            (),
+            {
+                "should_supplement": False,
+                "missing_types": [],
+            },
+        )()
+
+    def supplement(self, *, missing_types, document_text, ontology, existing_nodes):
+        return type(
+            "_Supplement",
+            (),
+            {
+                "new_nodes": [],
+                "new_edges": [],
+            },
+        )()
+
+    @staticmethod
+    def find_near_duplicates(graph_data, threshold=0.70):
+        return []
+
+    def backfill_summaries(self, *, graph_data, document_text, progress_callback=None):
+        if progress_callback is not None:
+            progress_callback("回填节点摘要... 批次 1/2 （已生成 1/2 个）")
+            progress_callback("回填节点摘要... 批次 2/2 （已生成 2/2 个）")
+        return {
+            "节点A": "节点A摘要",
+            "节点B": "节点B摘要",
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -253,6 +295,7 @@ def test_build_graph_allows_local_provider_without_zep_key(tmp_path, monkeypatch
 
     assert task is not None
     assert task.status == TaskStatus.COMPLETED
+    assert task.metadata.get("project_id") == project.project_id
     assert stored is not None
     assert stored.status == ProjectStatus.GRAPH_COMPLETED
     assert stored.graph_id == "graph_local_1"
@@ -416,6 +459,52 @@ def test_build_graph_surfaces_partial_summary_backfill_as_warning(tmp_path, monk
     assert task.result["diagnostics"]["summary_backfill_requested"] == 2
     assert task.result["diagnostics"]["summary_backfill_completed"] == 1
     assert task.result["diagnostics"]["summary_backfill_missing"] == ["节点B"]
+
+
+def test_build_graph_emits_summary_backfill_task_heartbeats(tmp_path, monkeypatch):
+    app = Flask(__name__)
+    project = _prepare_project(tmp_path, monkeypatch)
+    builder = _FakeBuilder(
+        graph_data={
+            "graph_id": "graph_summary_progress",
+            "nodes": [
+                {"uuid": "n1", "name": "节点A", "labels": ["Problem"], "summary": ""},
+                {"uuid": "n2", "name": "节点B", "labels": ["Solution"], "summary": ""},
+            ],
+            "edges": [{"uuid": "e1", "name": "RELATES_TO", "source_node_uuid": "n1", "target_node_uuid": "n2"}],
+            "node_count": 2,
+            "edge_count": 1,
+        },
+        graph_id="graph_summary_progress",
+    )
+    messages: list[str] = []
+    original_update_task = TaskManager.update_task
+
+    def _capture_update_task(self, task_id, **kwargs):
+        message = kwargs.get("message")
+        if message:
+            messages.append(message)
+        return original_update_task(self, task_id, **kwargs)
+
+    monkeypatch.setattr(TaskManager, "update_task", _capture_update_task)
+    monkeypatch.setattr(graph_api, "get_graph_builder_provider", lambda: "local")
+    monkeypatch.setattr(graph_api, "validate_graph_builder_config", lambda provider=None: [])
+    monkeypatch.setattr(graph_api, "get_graph_builder", lambda provider=None: builder)
+    monkeypatch.setattr(graph_api, "ReadingStructureExtractor", _SuccessfulReadingExtractor)
+    monkeypatch.setattr(graph_api.TextProcessor, "split_text", lambda text, chunk_size, overlap: ["chunk-a"])
+    monkeypatch.setattr(graph_api.threading, "Thread", _InlineThread)
+
+    import app.services.graph_quality_gate as quality_gate_module
+
+    monkeypatch.setattr(quality_gate_module, "GraphQualityGate", _ProgressReportingSummaryGate)
+
+    response, status = _call_build_graph(app, {"project_id": project.project_id})
+
+    assert status == 200
+    assert response["success"] is True
+    assert any("回填节点摘要... 批次 1/2" in message for message in messages)
+    assert any("回填节点摘要... 批次 2/2" in message for message in messages)
+    assert any("写回节点摘要... 2 个" == message for message in messages)
 
 
 def test_build_graph_skips_reading_structure_when_summary_coverage_is_too_low(tmp_path, monkeypatch):

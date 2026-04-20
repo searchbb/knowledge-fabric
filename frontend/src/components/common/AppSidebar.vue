@@ -80,6 +80,7 @@ const globalGroup = [
   { key: 'evolutionGlobal', label: '演化日志', icon: '📜', target: '/workspace/registry?tab=evolution' },
   { key: 'reviewGlobal', label: '审核队列', icon: '🧾', target: '/workspace/registry?tab=review' },
   { key: 'auto', label: '自动处理', icon: '⚙️', target: '/workspace/auto' },
+  { key: 'discoverQueue', label: 'Discover 队列', icon: '🧭', target: '/workspace/discover' },
 ]
 
 function resolveTarget(item) {

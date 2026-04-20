@@ -174,8 +174,21 @@ def create_relation(
     model_info: dict[str, str] | None = None,
     actor_id: str = "user",
     run_id: str = "",
+    job_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create a new cross-concept relation."""
+    """Create a new cross-concept relation.
+
+    Provenance fields (added 2026-04-17 per P4 / Discover V2 step 1):
+
+    - ``run_id``: the discover pipeline run that produced this relation,
+      empty string for manual creations. Persisted so we can trace back
+      which auto_pipeline execution introduced the relation without
+      scanning evolution_log.
+    - ``job_id``: the specific ``DiscoverJob`` (djob_…) that created it,
+      or ``None`` for manual creations. Used by Theme status panels and
+      future A/B evaluation to attribute relations to a single job for
+      comparison / undo.
+    """
     # Validate
     if not source_entry_id or not target_entry_id:
         raise ValueError("source_entry_id and target_entry_id are required")
@@ -199,7 +212,10 @@ def create_relation(
                 f"Relation already exists: {dedupe_key}"
             )
         if existing.get("status") == "deleted":
-            # Resurrect: update fields and set back to active
+            # Resurrect: update fields and set back to active. Provenance
+            # (run_id / job_id) is overwritten — the record should reflect
+            # the most recent run that validated this relation, not the
+            # original one that created-then-deleted it.
             now = datetime.now().isoformat()
             existing["status"] = "active"
             existing["review_status"] = "unreviewed"
@@ -209,6 +225,8 @@ def create_relation(
             existing["confidence"] = max(0.0, min(1.0, confidence))
             existing["source"] = source
             existing["model_info"] = model_info
+            existing["run_id"] = run_id
+            existing["job_id"] = job_id
             existing["updated_at"] = now
             store["relations"][existing["relation_id"]] = existing
             _save_relations(store)
@@ -248,6 +266,8 @@ def create_relation(
         "dedupe_key": dedupe_key,
         "theme_id": theme_id,
         "model_info": model_info,
+        "run_id": run_id,
+        "job_id": job_id,
         "created_at": now,
         "updated_at": now,
     }
@@ -434,6 +454,16 @@ def has_dedupe_key(dedupe_key: str, *, active_only: bool = False) -> bool:
     By default checks ALL statuses (including deleted), because the
     create_relation() function handles resurrection of deleted relations.
     Pass active_only=True to only match active relations.
+
+    NOTE: this is the per-key API. Hot loops that check many candidate
+    pairs should call :func:`load_existing_dedupe_keys` once instead —
+    it returns a ``set`` keyed the same way and avoids re-reading the
+    relations JSON for every check. This matters a lot: Stage 1 recall
+    in CrossConceptDiscoverer can issue tens of thousands of dedupe
+    checks per run (N×(N-1)/2 pairs × 6 relation_types × 2 directions),
+    and a per-call ``_load_relations()`` turns that into tens of
+    thousands of disk reads + full-scan iterations. P1.5 rewrite uses
+    the batch helper below for that reason.
     """
     store = _load_relations()
     for rel in store["relations"].values():
@@ -443,3 +473,28 @@ def has_dedupe_key(dedupe_key: str, *, active_only: bool = False) -> bool:
             continue
         return True
     return False
+
+
+def load_existing_dedupe_keys(*, active_only: bool = False) -> set[str]:
+    """Return every existing ``dedupe_key`` as a flat set.
+
+    One disk read, one pass over the relation store, O(1) membership
+    checks thereafter. Intended for hot loops that need to ask "is any
+    of these thousands of keys already known?" without hammering
+    :func:`has_dedupe_key`.
+
+    ``active_only=True`` filters out deleted relations — useful for
+    "which pairs are already live in the graph" style questions. The
+    default matches :func:`has_dedupe_key`'s default so the two
+    functions produce compatible answers for the same inputs.
+    """
+    store = _load_relations()
+    keys: set[str] = set()
+    for rel in store["relations"].values():
+        key = rel.get("dedupe_key")
+        if not key:
+            continue
+        if active_only and rel.get("status") != "active":
+            continue
+        keys.add(key)
+    return keys

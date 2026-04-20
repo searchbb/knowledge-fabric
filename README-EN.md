@@ -61,11 +61,18 @@ flowchart TD
     E --> F[Registry<br/>write to global Concept Registry<br/>and link to current article]
     F --> G[Theme Assignment<br/>classify into themes<br/>active + candidate both visible]
 
-    G --> H[Discover<br/>cross-article relation discovery<br/>within the matched primary Theme only]
+    G --> H[Schedule Discover Job<br/>create a cross-article discovery job<br/>non-blocking, does not hold the main pipeline]
     H --> I[Summarize / Audit<br/>aggregate phase results and audit fields]
     I --> J[RunOutcome returned to frontend]
 
+    H -. pending jobs .-> DJ[Discover Job Store]
+    DJ --> DW[Discover Worker<br/>background daemon / CLI drainer<br/>one job at a time]
+    DW --> DX[Cross-Concept Discoverer<br/>Stage 1 recall → Stage 2 LLM judge]
+    DX -. new relations .-> XR[Cross Relation Store]
+    DX -. funnel + run snapshot .-> DJ
+
     G -. produces theme data .-> K[Theme Store]
+    DX -. history + funnel .-> K
 
     K --> L[M3 Merge Scanner<br/>near-neighbor theme merge scan]
     K --> M[M2 Promote Scanner<br/>candidate → active auto-promotion]
@@ -87,6 +94,8 @@ flowchart TD
     T --> K
 ```
 
+> **Discover V2 (2026-04)**: After Theme Assignment, the main pipeline no longer calls the LLM synchronously to discover cross-article relations. Instead it writes a *discover job* to the Discover Job Store and returns immediately. The actual discovery runs asynchronously on a dedicated worker (or the `scripts/run_discover_jobs.py` CLI drainer). See the [Discover V2 — cross-article relation discovery](#discover-v2--cross-article-relation-discovery) section below for full details.
+
 ### Why not run cross-theme discovery for all theme pairs?
 
 ```mermaid
@@ -95,10 +104,110 @@ flowchart TD
     B --> C[As themes grow<br/>token usage and latency explode]
     C --> D[Current strategy:<br/>incremental Discover within same Theme only]
     D --> E[M2 / M3 governance consolidates knowledge<br/>into a small set of stable themes]
-    E --> F[When truly needed, add P3:<br/>scan Top-K neighbor themes only, not all pairs]
 ```
 
-The system uses **same-theme incremental discovery**: each pipeline run performs cross-article relation discovery only within the primary theme hit during that run. This avoids O(N²) full-pair scanning. Theme governance (M2 promote + M3 merge) continuously consolidates knowledge into fewer, stable themes — laying the groundwork for a future Top-K neighbor scan if broader coverage is needed.
+The system uses **same-theme incremental discovery**: each pipeline run performs cross-article relation discovery only within the primary theme hit during that run. This avoids O(N²) full-pair scanning. Theme governance (M2 promote + M3 merge) continuously consolidates knowledge into fewer, stable themes.
+
+## Discover V2 — cross-article relation discovery
+
+In V2, cross-article relation discovery moves from a **synchronous phase inside the main pipeline** to a **standalone background job system** with observability, rate-limiting, and an optional vector-based recall path. Key changes:
+
+- The main pipeline no longer blocks on LLM judgement. After Theme Assignment it schedules a *discover job* and returns to the user.
+- An independent Discover Worker (daemon or CLI) processes pending jobs one at a time.
+- Stage 1 candidate recall supports two modes: **rules** (default) and **embedding** (requires a real embedding provider; auto-degrades with a marker when none is configured).
+- Stage 2 LLM judgement auto-retries transient errors (connection / timeout / 5xx gateway); non-transient errors are not retried.
+- Two soft gates — **daily budget** and **per-theme hourly cooldown** — log every block to a rolling file and surface it prominently in the UI.
+- Every job, funnel, error, and relation provenance is auditable.
+
+### Discover Job state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : main pipeline schedules
+    pending --> running : Worker claims
+    running --> completed : all chunks succeeded
+    running --> partial : some chunks failed (soft-fail)
+    running --> failed : max_attempts exhausted
+    running --> pending : heartbeat timeout, requeued
+    pending --> cancelled : manual cancel
+    completed --> pending : retry (UI button)
+    partial --> pending : retry
+    failed --> pending : retry
+    cancelled --> pending : retry
+```
+
+### Stage 1 recall modes
+
+| Mode | How to enable | Notes |
+|------|---------------|-------|
+| Rules (default) | None | Enumerate all cross-article pairs, score by type complementarity + description token overlap; dedupe keys preloaded into a single set (P1.5 optimisation) |
+| Embedding | `DISCOVER_RECALL_MODE=embedding` + real provider | For each new concept, top-K nearest-neighbour search within the same theme (default K=20); reapply the same hard filters (cross-article, dedupe); rerank with the same light-rule score |
+
+**Safety gate**: when `DISCOVER_RECALL_MODE=embedding` is set but no production provider is wired (today only `DeterministicEmbeddingProvider` exists as a test double), dispatch **auto-degrades to rules mode** and stamps `fallback_to_rules=true` in the funnel. Set `DISCOVER_ALLOW_FALLBACK_EMBEDDING=1` to explicitly opt into the deterministic fallback for local dev. Runtime exceptions from the embedding call are caught and degraded the same way.
+
+### Rate-limit & observability
+
+- **Per-theme cooldown**: `DISCOVER_THEME_HOURLY_CAP` (default `10`) — max jobs created for the same theme per hour
+- **Global daily budget**: `DISCOVER_DAILY_JOB_BUDGET` (default `50`) — max jobs per calendar day across all themes
+- **Blocked events** are appended to `data/discover-skips.json` (rolling, 50 entries) and surfaced in the Discover panel as an amber alert: "N schedules throttled in the last hour / cooldown X / budget Y"
+- **Job funnel** flows through the entire chain: raw_pairs → after_incremental_gate → after_cross_article → after_dedupe_filter → sent_to_llm → llm_accepted → committed
+- **Relation provenance**: every auto-created cross-relation carries `run_id` + `job_id`, supporting per-job traceback
+- **Theme history**: each theme keeps the last 10 discover runs (with funnels) for trend comparison
+
+### Discover V2 environment variables
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `AUTO_START_DISCOVER_WORKER` | `0` | Set to `1` and `create_app()` starts the background Discover Worker daemon |
+| `DISCOVER_WORKER_IDLE_SECONDS` | `5` | Worker idle poll interval |
+| `DISCOVER_RECALL_MODE` | `rules` | `rules` or `embedding`; embedding requires a real provider or the opt-in below |
+| `DISCOVER_ALLOW_FALLBACK_EMBEDDING` | `0` | Set to `1` to allow the `DeterministicEmbeddingProvider` to run in embedding mode (testing / local dev) |
+| `DISCOVER_THEME_HOURLY_CAP` | `10` | Per-theme per-hour job cap; `0` disables |
+| `DISCOVER_DAILY_JOB_BUDGET` | `50` | Per-day global job cap; `0` disables |
+
+### CLI tools
+
+Drain the queue manually:
+
+```bash
+cd backend
+uv run python scripts/run_discover_jobs.py --list          # queue snapshot
+uv run python scripts/run_discover_jobs.py                 # drain until empty
+uv run python scripts/run_discover_jobs.py --max 5         # at most 5 jobs
+uv run python scripts/run_discover_jobs.py --recover-stale # requeue heartbeat-stale running jobs
+```
+
+### REST API
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/auto/discover-jobs/stats` | Status counts |
+| `GET` | `/api/auto/discover-jobs?status=...&limit=N` | List (filterable) |
+| `GET` | `/api/auto/discover-jobs/<job_id>` | Single job detail (includes funnel / errors) |
+| `GET` | `/api/auto/discover-jobs/by-theme/<theme_id>` | Theme-level aggregate (history + jobs) |
+| `GET` | `/api/auto/discover-jobs/by-project/<project_id>` | Project/article-level aggregate |
+| `GET` | `/api/auto/discover-jobs/recent-skips?within_seconds=3600` | Recent throttle events |
+| `POST` | `/api/auto/discover-jobs/run-once` | Run one pending job synchronously (manual drain) |
+| `POST` | `/api/auto/discover-jobs/recover-stale` | Requeue heartbeat-stale running jobs |
+| `POST` | `/api/auto/discover-jobs/<job_id>/retry` | Move a terminal (partial/failed/cancelled) job back to pending |
+| `POST` | `/api/auto/discover-jobs/<job_id>/cancel` | Cancel a pending job |
+
+### Frontend surfaces
+
+- **Auto pipeline `/workspace/auto`**: Discover queue panel (counters + attention-worthy jobs + throttle alert + click-through to job detail drawer)
+- **Discover queue `/workspace/discover`**: Standalone global job listing page (filters + inline retry/cancel + detail drawer)
+- **Theme hub `/workspace/themes/<theme_id>`**: Sidebar surfaces the theme's discover history + per-status counts
+
+### Data files
+
+Discover V2 keeps four independent JSON sidecars (all under `backend/data/`):
+
+| File | Contents |
+|------|----------|
+| `discover-jobs.json` | Lifecycle records for every discover job |
+| `discover-skips.json` | Rolling log of cooldown/budget-blocked schedules (50 entries) |
+| `concept_embeddings.json` | Concept vector cache (lazy-generate + text_hash-based invalidation) |
+| `cross_concept_relations.json` | Persisted cross-article relations (with `run_id` + `job_id` provenance) |
 
 ## Current release
 
@@ -186,6 +295,8 @@ npm run dev
 | Concept registry | `/workspace/registry` |
 | Theme hub | `/workspace/themes` |
 | Project workspace | `/workspace/:projectId` |
+| Auto pipeline | `/workspace/auto` |
+| Discover queue | `/workspace/discover` |
 
 ## Docker deployment
 
@@ -206,7 +317,15 @@ Start with the subset that doesn't require external services:
 cd backend
 uv run pytest -q \
   --ignore=tests/test_graph_builder_normalization.py \
+  --ignore=tests/test_graph_builder_e2e.py \
   --ignore=tests/test_theme_attach_detach_audit.py \
+  --ignore=tests/test_evolution_view_api.py \
+  --ignore=tests/test_theme_panorama_integration.py \
+  --ignore=tests/test_article_workspace_pipeline.py \
+  --ignore=tests/test_graph_api_build.py \
+  --ignore=tests/test_bench_bailian_concurrency.py \
+  --ignore=tests/test_extraction_benchmark.py \
+  --ignore=tests/test_openclaw_log_monitor.py \
   --ignore=tests/test_e2e_registry_flows.py \
   --ignore=tests/test_evolution_log_api.py
 ```

@@ -70,6 +70,24 @@ def add_pending() -> "Response":
     )
 
 
+@auto_pipeline_bp.route("/pending-urls/<fingerprint>", methods=["DELETE"])
+def cancel_pending(fingerprint: str) -> "Response":
+    """Remove one pending URL from the queue before it is claimed.
+
+    Only ``pending`` entries can be cancelled. Returns 409 if the entry is
+    already ``in_flight`` (the worker owns it) and 404 if the fingerprint is
+    not in the pending bucket.
+    """
+    store = PendingUrlStore()
+    try:
+        item = store.cancel_pending(fingerprint)
+    except RuntimeError as err:
+        return jsonify({"success": False, "error": str(err)}), 409
+    except KeyError as err:
+        return jsonify({"success": False, "error": str(err)}), 404
+    return jsonify({"success": True, "data": {"cancelled": item}})
+
+
 @auto_pipeline_bp.route("/retry-errored", methods=["POST"])
 def retry_errored() -> "Response":
     """Move a failed URL back to pending so the next drain picks it up again.

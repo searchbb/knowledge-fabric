@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import requests
 import subprocess
 import sys
 from pathlib import Path
@@ -61,6 +62,36 @@ def test_build_urls_use_expected_query_format():
     assert build_reading_view_url("proj_1", "http://localhost:3001") == (
         "http://localhost:3001/process/proj_1?mode=graph&view=reading"
     )
+
+
+def test_pipeline_disables_env_proxies_for_loopback_backend(tmp_path):
+    session = requests.Session()
+    assert session.trust_env is True
+
+    ArticleWorkspacePipeline(
+        vault_root=tmp_path / "vault",
+        frontend_base_url="http://localhost:3001",
+        backend_base_url="http://127.0.0.1:5001",
+        fetch_script_path="/tmp/fetch.py",
+        session=session,
+    )
+
+    assert session.trust_env is False
+
+
+def test_pipeline_keeps_env_proxies_for_remote_backend(tmp_path):
+    session = requests.Session()
+    assert session.trust_env is True
+
+    ArticleWorkspacePipeline(
+        vault_root=tmp_path / "vault",
+        frontend_base_url="http://localhost:3001",
+        backend_base_url="https://backend.example.com",
+        fetch_script_path="/tmp/fetch.py",
+        session=session,
+    )
+
+    assert session.trust_env is True
 
 
 def test_fetch_markdown_from_url_rejects_feishu_applink(tmp_path):
@@ -154,6 +185,90 @@ def test_fetch_markdown_from_url_executes_wrapper_directly(tmp_path):
 
     assert markdown.startswith("# 标题")
     assert commands == [[str(wrapper.resolve()), "https://example.com/article", "60000"]]
+
+
+def _attach_list_handler(logger_name: str):
+    import logging
+
+    records: list[logging.LogRecord] = []
+
+    class _ListHandler(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _ListHandler(level=logging.WARNING)
+    target = logging.getLogger(logger_name)
+    target.addHandler(handler)
+    return records, (lambda: target.removeHandler(handler))
+
+
+def test_fetch_markdown_from_url_warns_when_markdown_exceeds_long_article_threshold(
+    tmp_path,
+):
+    long_body = "# 长文标题\n\n" + ("这是一段正文内容" * 4000)
+    assert len(long_body) > 30000
+
+    class _Result:
+        returncode = 0
+        stdout = long_body
+        stderr = ""
+
+    def fake_command_runner(command, capture_output=True, text=True, timeout=None):
+        return _Result()
+
+    pipeline = ArticleWorkspacePipeline(
+        vault_root=tmp_path / "vault",
+        frontend_base_url="http://localhost:3001",
+        backend_base_url="http://localhost:5001",
+        fetch_script_path="/tmp/fetch.py",
+        note_subdir="知识工作台/微信文章",
+        session=_FakeSession(),
+        command_runner=fake_command_runner,
+        sleep_func=lambda _: None,
+    )
+
+    records, detach = _attach_list_handler("mirofish.article_workspace_pipeline")
+    try:
+        pipeline._fetch_markdown_from_url("https://example.com/very-long-article")
+    finally:
+        detach()
+
+    warnings = [r for r in records if r.levelname == "WARNING"]
+    assert any("长文" in r.getMessage() for r in warnings), (
+        f"expected a 长文 warning, got: {[r.getMessage() for r in warnings]}"
+    )
+
+
+def test_fetch_markdown_from_url_does_not_warn_for_normal_article(tmp_path):
+    normal_body = "# 标题\n\n" + ("普通正文" * 200)
+    assert len(normal_body) < 30000
+
+    class _Result:
+        returncode = 0
+        stdout = normal_body
+        stderr = ""
+
+    def fake_command_runner(command, capture_output=True, text=True, timeout=None):
+        return _Result()
+
+    pipeline = ArticleWorkspacePipeline(
+        vault_root=tmp_path / "vault",
+        frontend_base_url="http://localhost:3001",
+        backend_base_url="http://localhost:5001",
+        fetch_script_path="/tmp/fetch.py",
+        note_subdir="知识工作台/微信文章",
+        session=_FakeSession(),
+        command_runner=fake_command_runner,
+        sleep_func=lambda _: None,
+    )
+
+    records, detach = _attach_list_handler("mirofish.article_workspace_pipeline")
+    try:
+        pipeline._fetch_markdown_from_url("https://example.com/normal-article")
+    finally:
+        detach()
+
+    assert not any("长文" in r.getMessage() for r in records)
 
 
 class _FakeResponse:

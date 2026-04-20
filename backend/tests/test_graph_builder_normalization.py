@@ -1145,6 +1145,45 @@ def test_add_text_batches_bulk_updates_build_stats():
     assert diagnostics["aborted_due_to_rate_limit"] is False
 
 
+def test_set_ontology_skips_malformed_attribute_and_pair_items():
+    builder = GraphBuilderService()
+
+    ontology = {
+        "entity_types": [
+            {
+                "name": "Example",
+                "description": "案例",
+                "attributes": [
+                    {"name": "scenario", "description": "场景", "type": "text"},
+                    "bad-attr",
+                ],
+            },
+            {
+                "name": "Solution",
+                "description": "方案",
+                "attributes": [],
+            },
+        ],
+        "edge_types": [
+            {
+                "name": "HAS_EXAMPLE",
+                "description": "案例验证",
+                "source_targets": [
+                    {"source": "Solution", "target": "Example"},
+                    "bad-pair",
+                ],
+            }
+        ],
+    }
+
+    builder.set_ontology("graph_test", ontology)
+
+    assert "Example" in builder._graphiti_entity_types
+    assert "scenario" in builder._graphiti_entity_types["Example"].model_fields
+    assert ("Solution", "Example") in builder._graphiti_edge_type_map
+    assert builder._graphiti_edge_type_map[("Solution", "Example")] == ["HAS_EXAMPLE"]
+
+
 def run_async(awaitable):
     import asyncio
 

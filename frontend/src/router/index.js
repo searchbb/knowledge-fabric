@@ -10,6 +10,7 @@ import WorkspacePage from '../pages/WorkspacePage/WorkspacePage.vue'
 import RegistryPage from '../pages/RegistryPage/RegistryPage.vue'
 import OverviewPage from '../pages/OverviewPage/OverviewPage.vue'
 import AutoPipelinePage from '../pages/AutoPipelinePage/AutoPipelinePage.vue'
+import DiscoverQueuePage from '../pages/DiscoverQueuePage/DiscoverQueuePage.vue'
 import ThemeHubPage from '../pages/ThemeViewPage/ThemeViewPage.vue'
 import ThemeDetailPage from '../pages/ThemeDetailPage/ThemeDetailPage.vue'
 import ConceptDetailPage from '../pages/ConceptDetailPage/ConceptDetailPage.vue'
@@ -111,6 +112,17 @@ const routes = [
     path: '/workspace/auto',
     name: 'AutoPipeline',
     component: AutoPipelinePage,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/discover',
+    name: 'DiscoverQueue',
+    // Eager-load this route with the main workspace shell so switching from an
+    // already-open page does not need a second chunk fetch from the dev server.
+    component: DiscoverQueuePage,
     meta: {
       runtimeSurface: 'global',
       productStatus: 'phase2',

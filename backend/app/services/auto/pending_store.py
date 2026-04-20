@@ -465,6 +465,41 @@ class PendingUrlStore:
                 "deduped": deduped,
             }
 
+    def cancel_pending(self, fingerprint: str) -> dict[str, Any]:
+        """Remove one entry from the pending bucket by fingerprint.
+
+        Only ``pending`` entries can be cancelled. Attempting to cancel an
+        ``in_flight`` entry (already claimed by a running worker) is rejected
+        with a 409-style error — the worker owns that entry until it finishes.
+
+        Returns the removed item on success.
+        Raises ``KeyError`` if the fingerprint is not in ``pending``.
+        Raises ``RuntimeError`` if the fingerprint is ``in_flight`` (busy).
+        """
+        with _flock(self.path):
+            data = self._read()
+            # Reject if currently in-flight
+            for item in data["in_flight"]:
+                if item.get("url_fingerprint") == fingerprint:
+                    raise RuntimeError(
+                        f"cannot cancel {fingerprint}: entry is in_flight (already claimed by a running worker)"
+                    )
+            # Find and remove from pending
+            kept = []
+            removed = None
+            for item in data["pending"]:
+                if item.get("url_fingerprint") == fingerprint and removed is None:
+                    removed = item
+                else:
+                    kept.append(item)
+            if removed is None:
+                raise KeyError(
+                    f"fingerprint {fingerprint!r} not found in pending bucket"
+                )
+            data["pending"] = kept
+            self._atomic_write(data)
+            return removed
+
     def clear_errored(self) -> int:
         """Delete every entry in the errored bucket. Returns the count removed.
 

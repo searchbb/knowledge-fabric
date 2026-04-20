@@ -153,6 +153,30 @@ def _order_by_name(items: List[Dict[str, Any]], ordered_names: List[str]) -> Lis
     return sorted(items, key=lambda item: (order_index.get(item.get("name"), len(order_index)), item.get("name", "")))
 
 
+def _normalize_attribute_definitions(raw_attributes: Any) -> List[Dict[str, str]]:
+    """Drop malformed attribute items and normalize the surviving dict shape."""
+    if not isinstance(raw_attributes, list):
+        return []
+
+    normalized: List[Dict[str, str]] = []
+    seen_names = set()
+    for attr in raw_attributes:
+        if not isinstance(attr, dict):
+            continue
+        name = str(attr.get("name", "")).strip()
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        normalized.append(
+            {
+                "name": name,
+                "type": str(attr.get("type") or "text").strip() or "text",
+                "description": str(attr.get("description") or name).strip() or name,
+            }
+        )
+    return normalized
+
+
 def _normalize_entity_type_name(name: str) -> str:
     """将实体类型名收敛到固定 schema。"""
     normalized = _canonicalize_name(name, ENTITY_NAME_ALIASES, _to_pascal_case)
@@ -485,6 +509,8 @@ class OntologyGenerator:
         if "analysis_summary" not in result:
             result["analysis_summary"] = ""
 
+        recovered_edge_types: List[Dict[str, Any]] = []
+
         # 验证实体类型
         entity_name_map: Dict[str, str] = {}
         deduped_entities: List[Dict[str, Any]] = []
@@ -492,6 +518,16 @@ class OntologyGenerator:
         for entity in result["entity_types"]:
             if not isinstance(entity, dict):
                 continue
+            nested_summary = entity.pop("analysis_summary", None)
+            if (
+                not str(result.get("analysis_summary", "")).strip()
+                and isinstance(nested_summary, str)
+                and nested_summary.strip()
+            ):
+                result["analysis_summary"] = nested_summary.strip()
+            nested_edge_types = entity.pop("edge_types", None)
+            if not result["edge_types"] and isinstance(nested_edge_types, list):
+                recovered_edge_types.extend(nested_edge_types)
             original_name = str(entity.get("name", "")).strip()
             if original_name:
                 normalized_name = _normalize_entity_type_name(original_name)
@@ -500,8 +536,7 @@ class OntologyGenerator:
                 entity_name_map[_normalize_identifier_key(original_name)] = normalized_name
                 if normalized_name != original_name:
                     logger.warning(f"Entity type name '{original_name}' normalized to '{normalized_name}'")
-            if "attributes" not in entity:
-                entity["attributes"] = []
+            entity["attributes"] = _normalize_attribute_definitions(entity.get("attributes"))
             if "examples" not in entity:
                 entity["examples"] = []
             if len(entity.get("description", "")) > 100:
@@ -513,6 +548,10 @@ class OntologyGenerator:
             elif entity_name:
                 logger.warning(f"Duplicate entity type '{entity_name}' removed during validation")
         result["entity_types"] = _order_by_name(deduped_entities, FIXED_ENTITY_TYPE_ORDER)
+
+        if not result["edge_types"] and recovered_edge_types:
+            logger.warning("顶层 edge_types 缺失，已从实体定义中的错位字段恢复")
+            result["edge_types"] = recovered_edge_types
 
         # 验证关系类型
         deduped_edges: List[Dict[str, Any]] = []
@@ -528,8 +567,7 @@ class OntologyGenerator:
                     logger.warning(f"Edge type name '{original_name}' normalized to '{normalized_name}'")
             if "source_targets" not in edge:
                 edge["source_targets"] = []
-            if "attributes" not in edge:
-                edge["attributes"] = []
+            edge["attributes"] = _normalize_attribute_definitions(edge.get("attributes"))
             if len(edge.get("description", "")) > 100:
                 edge["description"] = edge["description"][:97] + "..."
             normalized_pairs = []

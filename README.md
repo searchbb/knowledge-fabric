@@ -61,11 +61,18 @@ flowchart TD
     E --> F[Registry<br/>写入全局 Concept Registry<br/>并 link 到当前文章]
     F --> G[Theme Assignment<br/>主题归类<br/>active + candidate 都可见]
 
-    G --> H[Discover<br/>仅在本次命中的主 Theme 内<br/>做同主题、跨文章关系发现]
+    G --> H[Schedule Discover Job<br/>创建跨文章关系发现任务<br/>非阻塞，不占主流程时间]
     H --> I[Summarize / Audit<br/>汇总 phase 结果与审计字段]
     I --> J[RunOutcome 返回前端]
 
+    H -. pending 任务 .-> DJ[Discover Job Store]
+    DJ --> DW[Discover Worker<br/>后台 daemon / CLI 排空<br/>一次跑一条]
+    DW --> DX[Cross-Concept Discoverer<br/>Stage 1 召回 → Stage 2 LLM 判定]
+    DX -. 新关系 .-> XR[Cross Relation Store]
+    DX -. 漏斗 + 运行快照 .-> DJ
+
     G -. 产生 theme 数据 .-> K[Theme Store]
+    DX -. 历史摘要 / funnel .-> K
 
     K --> L[M3 Merge Scanner<br/>近邻主题合并扫描]
     K --> M[M2 Promote Scanner<br/>candidate → active 自动晋升]
@@ -87,6 +94,8 @@ flowchart TD
     T --> K
 ```
 
+> **Discover V2（2026-04）**：主流程完成 Theme Assignment 之后不再同步调用 LLM 做跨文章关系发现，而是在 Discover Job Store 里落一条待办记录，立即返回。发现工作由独立的 Discover Worker（或 `scripts/run_discover_jobs.py` 手动排空）异步完成。详见下方 [Discover V2 — 跨文章关系发现](#discover-v2--跨文章关系发现)。
+
 ### 为什么不对所有主题两两做关系发现？
 
 ```mermaid
@@ -95,10 +104,110 @@ flowchart TD
     B --> C[Theme 多了以后<br/>token 与延迟都会爆]
     C --> D[当前策略：<br/>只在同 Theme 内增量 Discover]
     D --> E[先靠 M2 / M3 把知识尽量收拢到少量稳定 Theme]
-    E --> F[等确有必要，再做 P3：<br/>只扫 Top-K 邻居 Theme，而非全量互跑]
 ```
 
-当前采用**同主题增量发现**策略：每次处理时只在本次命中的主 Theme 内，对同主题的已有文章做跨文章关系发现。这避免了 O(N²) 的全量主题对扫描。主题治理（M2 晋升 + M3 合并）会持续把知识收拢到少量稳定主题，为未来按需扩展到 Top-K 邻居扫描打好基础。
+当前采用**同主题增量发现**策略：每次处理时只在本次命中的主 Theme 内，对同主题的已有文章做跨文章关系发现。这避免了 O(N²) 的全量主题对扫描。主题治理（M2 晋升 + M3 合并）会持续把知识收拢到少量稳定主题。
+
+## Discover V2 — 跨文章关系发现
+
+跨文章关系发现（Discover）在 V2 里从**主流程里的同步阶段**变成了**独立的后台作业系统**，并增加了观测、限流、可选的向量召回等能力。关键点：
+
+- 主流程不再同步等 LLM 判定完成；只在 Theme 归类成功后落一条 *discover job*，立即返回给用户
+- 独立的 Discover Worker（daemon 或 CLI）按顺序把 pending 任务处理完
+- Stage 1 候选召回支持两种模式：**规则模式**（默认）和**向量召回模式**（需要真实 embedding provider；未配置时拒绝启用并自动降级）
+- Stage 2 LLM 判定对瞬态错误（connection error / timeout / 5xx gateway）自动重试，非瞬态错误不重试
+- 自带**每日预算**和**单主题每小时冷却**两道软门禁，被拦截时会记入滚动日志，UI 显著提示
+- 所有 job、漏斗（funnel）、错误、关系来源都可审计
+
+### Discover Job 状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : 主流程 schedule
+    pending --> running : Worker 抢占
+    running --> completed : 全部 chunk 成功
+    running --> partial : 部分 chunk 失败（soft-fail）
+    running --> failed : max_attempts 耗尽
+    running --> pending : heartbeat 超时，重入队列
+    pending --> cancelled : 人工取消
+    completed --> pending : 重试（UI 按钮）
+    partial --> pending : 重试
+    failed --> pending : 重试
+    cancelled --> pending : 重试
+```
+
+### Stage 1 召回模式
+
+| 模式 | 启用方式 | 说明 |
+|------|---------|------|
+| 规则（默认） | 无 | 枚举所有跨文章 pair，跑类型互补 + token 重叠的打分；dedupe keys 一次性预加载成 set（P1.5 优化） |
+| 向量召回 | `DISCOVER_RECALL_MODE=embedding` + 真实 provider | 对每个新概念在同主题内做 top-K 近邻检索（默认 K=20），再过相同的硬规则（跨文章、dedupe），用轻规则做 rerank |
+
+**安全阀**：当启用 `DISCOVER_RECALL_MODE=embedding` 但找不到真实 embedding provider（目前只有 `DeterministicEmbeddingProvider` 测试实现）时，dispatch **自动降级到规则模式**并在 funnel 里标 `fallback_to_rules=true`。如果希望在开发环境用确定性 provider 跑一遍，可设 `DISCOVER_ALLOW_FALLBACK_EMBEDDING=1` 显式绕过。同样地，运行时 embedding 调用抛异常也会被 catch 并降级。
+
+### 限流与可观测性
+
+- **单主题冷却**：`DISCOVER_THEME_HOURLY_CAP`（默认 `10`）限制同一主题每小时创建的 discover job 数
+- **全局日预算**：`DISCOVER_DAILY_JOB_BUDGET`（默认 `50`）限制全系统单日 job 数
+- **被拦截事件**都会写入 `data/discover-skips.json` 滚动日志（最多 50 条），前端在 AutoPipelinePage 的 Discover 面板以琥珀色 alert 呈现："过去 1 小时有 N 次调度被拦截 / 主题冷却 X / 日预算 Y"
+- **Job 漏斗**（funnel）贯穿整条链路：raw_pairs → after_incremental_gate → after_cross_article → after_dedupe_filter → sent_to_llm → llm_accepted → committed
+- **Relation provenance**：每条自动创建的跨文关系都带 `run_id` + `job_id`，支持按 job 追溯
+- **Theme 历史**：每个主题保留最近 10 次 discover 运行的摘要（含 funnel），供趋势对比
+
+### Discover V2 环境变量
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `AUTO_START_DISCOVER_WORKER` | `0` | 设为 `1` 时 `create_app()` 启动后台 Discover Worker daemon |
+| `DISCOVER_WORKER_IDLE_SECONDS` | `5` | Worker 空轮询间隔 |
+| `DISCOVER_RECALL_MODE` | `rules` | `rules` 或 `embedding`；embedding 需要真实 provider 或下面这个 opt-in |
+| `DISCOVER_ALLOW_FALLBACK_EMBEDDING` | `0` | 设为 `1` 允许用 `DeterministicEmbeddingProvider` 跑 embedding 模式（测试/本地） |
+| `DISCOVER_THEME_HOURLY_CAP` | `10` | 单主题每小时 job 数上限；`0` 禁用 |
+| `DISCOVER_DAILY_JOB_BUDGET` | `50` | 全系统每天 job 数上限；`0` 禁用 |
+
+### CLI 工具
+
+手动排空队列：
+
+```bash
+cd backend
+uv run python scripts/run_discover_jobs.py --list          # 看队列快照
+uv run python scripts/run_discover_jobs.py                 # 排空到队列为空
+uv run python scripts/run_discover_jobs.py --max 5         # 最多跑 5 条
+uv run python scripts/run_discover_jobs.py --recover-stale # 把心跳超时的 running 重置回 pending
+```
+
+### REST API
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| `GET` | `/api/auto/discover-jobs/stats` | 状态计数 |
+| `GET` | `/api/auto/discover-jobs?status=...&limit=N` | 列表（可筛选）|
+| `GET` | `/api/auto/discover-jobs/<job_id>` | 单 job 详情（含 funnel / errors） |
+| `GET` | `/api/auto/discover-jobs/by-theme/<theme_id>` | 主题级聚合视图（历史 + 相关 jobs） |
+| `GET` | `/api/auto/discover-jobs/by-project/<project_id>` | 文章级聚合视图 |
+| `GET` | `/api/auto/discover-jobs/recent-skips?within_seconds=3600` | 被限流拦截的最近事件 |
+| `POST` | `/api/auto/discover-jobs/run-once` | 同步跑一条 pending（手动排空）|
+| `POST` | `/api/auto/discover-jobs/recover-stale` | 恢复心跳超时的 running |
+| `POST` | `/api/auto/discover-jobs/<job_id>/retry` | 把终态（partial/failed/cancelled）回到 pending |
+| `POST` | `/api/auto/discover-jobs/<job_id>/cancel` | 取消 pending |
+
+### 前端入口
+
+- **自动处理 `/workspace/auto`**：Discover 队列面板（统计 + 需关注的任务 + 被限流 alert + 点进去看详情抽屉）
+- **Discover 队列 `/workspace/discover`**：独立的全局 job 列表页（筛选 + 批量操作 + 详情抽屉）
+- **主题枢纽 `/workspace/themes/<theme_id>`**：主题侧栏展示该主题的 discover 历史 + job 状态
+
+### 数据文件
+
+Discover V2 自带四个独立的 JSON sidecar（均位于 `backend/data/`）：
+
+| 文件 | 内容 |
+|------|------|
+| `discover-jobs.json` | 所有 discover jobs 的生命周期记录 |
+| `discover-skips.json` | 被 cooldown/budget 拦截的滚动日志（50 条）|
+| `concept_embeddings.json` | 概念向量缓存（懒生成 + text_hash 失效）|
+| `cross_concept_relations.json` | 落库的跨文章关系（带 `run_id` + `job_id` provenance）|
 
 ## 当前版本
 
@@ -186,6 +295,8 @@ npm run dev
 | 概念注册表 | `/workspace/registry` |
 | 主题枢纽 | `/workspace/themes` |
 | 项目工作台 | `/workspace/:projectId` |
+| 自动处理 | `/workspace/auto` |
+| Discover 队列 | `/workspace/discover` |
 
 ## Docker 部署
 
@@ -206,15 +317,32 @@ docker compose up -d --build
 cd backend
 uv run pytest -q \
   --ignore=tests/test_graph_builder_normalization.py \
+  --ignore=tests/test_graph_builder_e2e.py \
   --ignore=tests/test_theme_attach_detach_audit.py \
   --ignore=tests/test_e2e_registry_flows.py \
-  --ignore=tests/test_evolution_log_api.py
+  --ignore=tests/test_evolution_log_api.py \
+  --ignore=tests/test_evolution_view_api.py \
+  --ignore=tests/test_theme_panorama_integration.py \
+  --ignore=tests/test_article_workspace_pipeline.py \
+  --ignore=tests/test_graph_api_build.py \
+  --ignore=tests/test_bench_bailian_concurrency.py \
+  --ignore=tests/test_extraction_benchmark.py \
+  --ignore=tests/test_openclaw_log_monitor.py
+```
+
+说明：上面排除的测试分两类——一类依赖真实 Neo4j（`graphiti_core` 会在创建索引时连 `localhost:7687`），另一类依赖联网的 LLM / 真实后端。当环境具备这些服务时去掉对应的 `--ignore`。
+
+前端测试：
+
+```bash
+cd frontend
+npm test
 ```
 
 完整测试（需要真实 Neo4j 和 LLM 在线调用）：
 
 ```bash
-uv run pytest -q
+cd backend && uv run pytest -q
 ```
 
 ## 常见问题
