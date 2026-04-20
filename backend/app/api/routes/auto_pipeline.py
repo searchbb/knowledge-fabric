@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
+from ...services.auto.note_store import save_note_to_file
 from ...services.auto.pending_store import (
     DuplicateUrlError,
     PendingUrlStore,
@@ -87,8 +88,6 @@ def add_pending_note() -> "Response":
     ``PendingUrlStore.add_pending(md_path=...)``. The downstream drain
     logic handles it identically to a URL-sourced markdown file.
     """
-    from ...services.auto.note_store import save_note_to_file
-
     body = request.get_json(silent=True) or {}
     title = (body.get("title") or "").strip()
     markdown = (body.get("markdown") or "").strip()

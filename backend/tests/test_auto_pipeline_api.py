@@ -259,9 +259,57 @@ class TestPendingNotesRoute:
         from app.services.auto.note_store import NOTE_DIR_ENV_VAR
         monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
         resp = api_client.post("/api/auto/pending-notes", data="not json")
-        # Either missing-title OR missing-markdown error counts — both imply
-        # the route gracefully treated the body as empty.
+        # Non-JSON body is silently treated as empty, then the required-title
+        # check fires first. Pinning "title" in the error locks the failure
+        # mode so future regressions that swallow the body differently fail
+        # here rather than leaking through.
         assert resp.status_code == 400
+        assert "title" in resp.get_json()["error"].lower()
+
+    def test_whitespace_only_title_returns_400(
+        self, api_client, tmp_path, monkeypatch
+    ):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+        resp = api_client.post(
+            "/api/auto/pending-notes",
+            json={"title": "   \t\n", "markdown": "body"},
+        )
+        assert resp.status_code == 400
+        assert "title" in resp.get_json()["error"].lower()
+
+    def test_whitespace_only_markdown_returns_400(
+        self, api_client, tmp_path, monkeypatch
+    ):
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+        resp = api_client.post(
+            "/api/auto/pending-notes",
+            json={"title": "t", "markdown": "   \n\n\t"},
+        )
+        assert resp.status_code == 400
+        assert "markdown" in resp.get_json()["error"].lower()
+
+    def test_allow_duplicate_bypass(
+        self, api_client, tmp_path, monkeypatch
+    ):
+        """allow_duplicate=True lets the same content be resubmitted —
+        mirrors the URL endpoint behaviour and is relied upon by retry
+        flows."""
+        from app.services.auto.note_store import NOTE_DIR_ENV_VAR
+        monkeypatch.setenv(NOTE_DIR_ENV_VAR, str(tmp_path / "notes"))
+
+        payload = {"title": "t", "markdown": "body"}
+        first = api_client.post("/api/auto/pending-notes", json=payload)
+        assert first.status_code == 200
+        assert len(first.get_json()["data"]["added"]) == 1
+
+        payload_with_bypass = {**payload, "allow_duplicate": True}
+        second = api_client.post("/api/auto/pending-notes", json=payload_with_bypass)
+        assert second.status_code == 200
+        body = second.get_json()
+        assert len(body["data"]["added"]) == 1
+        assert body["data"]["duplicates"] == []
 
     def test_duplicate_note_returns_duplicate_record(
         self, api_client, tmp_path, monkeypatch
