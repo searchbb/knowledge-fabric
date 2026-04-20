@@ -198,6 +198,15 @@ uv run python scripts/run_discover_jobs.py --recover-stale # requeue heartbeat-s
 - **Discover queue `/workspace/discover`**: Standalone global job listing page (filters + inline retry/cancel + detail drawer)
 - **Theme hub `/workspace/themes/<theme_id>`**: Sidebar surfaces the theme's discover history + per-status counts
 
+## Rich-text paste entry (added 2026-04-20)
+
+Alongside the URL form, AutoPipelinePage now accepts rich text / plain text / images pasted from anywhere (WeChat / Twitter / Feishu / clipboard). The frontend runs HTML through Turndown + turndown-plugin-gfm to produce Markdown. The backend stores each note as a content-hashed file under `backend/data/notes/<hash>.md` and enqueues it via `PendingUrlStore.add_pending(md_path=...)` — the downstream extraction pipeline (graph → concept → theme → discover) is shared with URL-sourced articles.
+
+- Entry: the "从文字/富文本创建笔记" card below the URL input on `/workspace/auto`
+- API: `POST /api/auto/pending-notes` with body `{title, markdown, allow_duplicate?}`
+- Dedup: identical content → identical file path → identical fingerprint, auto-rejected
+- Images: v1 keeps them only as base64 data URLs inlined in the Markdown; they do **not** participate in concept extraction yet (OCR / vision-LLM is scheduled for the next iteration)
+
 ### Data files
 
 Discover V2 keeps four independent JSON sidecars (all under `backend/data/`):

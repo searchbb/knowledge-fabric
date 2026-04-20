@@ -198,6 +198,15 @@ uv run python scripts/run_discover_jobs.py --recover-stale # 把心跳超时的 
 - **Discover 队列 `/workspace/discover`**：独立的全局 job 列表页（筛选 + 批量操作 + 详情抽屉）
 - **主题枢纽 `/workspace/themes/<theme_id>`**：主题侧栏展示该主题的 discover 历史 + job 状态
 
+## 富文本粘贴入口（2026-04-20 新增）
+
+AutoPipelinePage 除了接受 URL，还支持从任意位置（微信 / 推特 / 飞书 / 剪贴板）粘贴一段富文本或图片。前端通过 Turndown + turndown-plugin-gfm 把 HTML 转成 Markdown，后端按**内容哈希**存到 `backend/data/notes/<hash>.md`，然后走 `PendingUrlStore.add_pending(md_path=...)` 复用 URL 文章一模一样的抽取管线（graph → concept → theme → discover）。
+
+- 入口：`/workspace/auto` 页面 URL 输入框下方的"从文字/富文本创建笔记"卡片
+- API：`POST /api/auto/pending-notes`，body `{title, markdown, allow_duplicate?}`
+- 去重：内容 hash 相同 → 文件路径相同 → fingerprint 相同 → 自动判重
+- 图片：v1 只保留为 base64 data URL 内嵌在 MD 里，**不参与**抽取（OCR / 视觉 LLM 留给下一轮迭代）
+
 ### 数据文件
 
 Discover V2 自带四个独立的 JSON sidecar（均位于 `backend/data/`）：
