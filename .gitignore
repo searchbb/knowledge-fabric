@@ -66,6 +66,7 @@ backend/uploads/
 # Docker 数据
 data/
 !frontend/src/data/
+backend/data/notes/
 
 # 本地生成/实验产物
 graphify-out/
