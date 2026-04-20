@@ -264,19 +264,33 @@
       </div>
     </CollapsibleCard>
 
-    <!-- 7. 失败 bucket -->
-    <article class="bucket-card">
-      <div class="bucket-header">
-        <div class="card-title">失败 ({{ displayBuckets.errored.length }})</div>
-        <div v-if="displayBuckets.errored.length > 0" class="bucket-header-actions">
-          <button class="btn-bucket btn-bucket-retry" :disabled="!!bulkBusy" @click="retryAllErrored">
-            {{ bulkBusy === 'retry' ? '重试中...' : '一键重试失败' }}
+    <!-- 7. 失败 bucket — auto-expands when there are items -->
+    <CollapsibleCard
+      title="失败"
+      :badge="displayBuckets.errored.length"
+      storage-key="auto-pipeline:collapse:bucket-errored"
+      :force-open="displayBuckets.errored.length > 0"
+      data-test="bucket-errored"
+    >
+      <template #summary-extra>
+        <span v-if="displayBuckets.errored.length > 0" class="bucket-header-actions">
+          <button
+            class="btn-bucket btn-bucket-retry"
+            :disabled="!!bulkBusy"
+            @click.stop.prevent="retryAllErrored"
+          >
+            {{ bulkBusy === 'retry' ? '重试中...' : '一键重试' }}
           </button>
-          <button class="btn-bucket btn-bucket-clear" :disabled="!!bulkBusy" @click="clearAllErrored">
-            {{ bulkBusy === 'clear' ? '清空中...' : '清空失败' }}
+          <button
+            class="btn-bucket btn-bucket-clear"
+            :disabled="!!bulkBusy"
+            @click.stop.prevent="clearAllErrored"
+          >
+            {{ bulkBusy === 'clear' ? '清空中...' : '清空' }}
           </button>
-        </div>
-      </div>
+        </span>
+      </template>
+
       <div v-if="bulkResult" :class="['bulk-result', bulkResult.kind]">{{ bulkResult.text }}</div>
       <div v-if="!displayBuckets.errored.length" class="empty-note">还没有失败记录。</div>
       <div v-else class="bucket-list">
@@ -306,13 +320,15 @@
           </div>
         </div>
       </div>
-    </article>
+    </CollapsibleCard>
 
     <!-- 8. 执行中 bucket -->
-    <article class="bucket-card">
-      <div class="bucket-header">
-        <div class="card-title">执行中 ({{ displayBuckets.in_flight.length }})</div>
-      </div>
+    <CollapsibleCard
+      title="执行中"
+      :badge="displayBuckets.in_flight.length"
+      storage-key="auto-pipeline:collapse:bucket-in-flight"
+      data-test="bucket-in-flight"
+    >
       <div v-if="!displayBuckets.in_flight.length" class="empty-note">当前没有进行中的任务。</div>
       <div v-else class="bucket-list">
         <div v-for="item in displayBuckets.in_flight" :key="itemKey(item)" class="bucket-row">
@@ -329,13 +345,15 @@
           <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
         </div>
       </div>
-    </article>
+    </CollapsibleCard>
 
     <!-- 9. 已完成 bucket -->
-    <article class="bucket-card">
-      <div class="bucket-header">
-        <div class="card-title">已完成 ({{ displayBuckets.processed.length }})</div>
-      </div>
+    <CollapsibleCard
+      title="已完成"
+      :badge="displayBuckets.processed.length"
+      storage-key="auto-pipeline:collapse:bucket-processed"
+      data-test="bucket-processed"
+    >
       <div v-if="!displayBuckets.processed.length" class="empty-note">还没有成功处理过任何 URL。</div>
       <div v-else class="bucket-list">
         <div v-for="item in displayBuckets.processed" :key="itemKey(item)" class="bucket-row">
@@ -349,7 +367,7 @@
           <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
         </div>
       </div>
-    </article>
+    </CollapsibleCard>
 
     <!-- 10. LLM 抽取模式（配置，沉底） -->
     <CollapsibleCard

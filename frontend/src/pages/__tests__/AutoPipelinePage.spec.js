@@ -567,7 +567,7 @@ describe('AutoPipelinePage', () => {
     await flushPromises()
 
     // Scope to the Discover card: the errored URL bucket has its own
-    // "一键重试失败" header action and per-row retry notes, so the raw
+    // "一键重试" header action and per-row retry notes, so the raw
     // string could collide on the whole wrapper.
     expect(wrapper.find('[data-test="discover-card"]').text()).toContain('重试失败')
   })
@@ -837,12 +837,16 @@ describe('AutoPipelinePage', () => {
     })
     await flushPromises()
 
-    const bucketLists = wrapper.findAll('.bucket-card .bucket-list')
-    expect(bucketLists).toHaveLength(4)
-    // DOM order per spec §3: pending, errored, in_flight, processed
-    expect(bucketLists[0].text()).toMatch(/new\.example\/b[\s\S]*old\.example\/a/)
-    expect(bucketLists[1].text()).toMatch(/err-new[\s\S]*err-old/)
-    expect(bucketLists[2].text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
-    expect(bucketLists[3].text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
+    // Task 6 (2026-04-20): 待处理 stays as <article class="bucket-card">
+    // (primary actionable queue); the other three are wrapped in
+    // <CollapsibleCard> and scoped via `data-test`.
+    const pending = wrapper.find('.bucket-card .bucket-list')
+    const errored = wrapper.find('[data-test="bucket-errored"] .bucket-list')
+    const inFlight = wrapper.find('[data-test="bucket-in-flight"] .bucket-list')
+    const processed = wrapper.find('[data-test="bucket-processed"] .bucket-list')
+    expect(pending.text()).toMatch(/new\.example\/b[\s\S]*old\.example\/a/)
+    expect(errored.text()).toMatch(/err-new[\s\S]*err-old/)
+    expect(inFlight.text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
+    expect(processed.text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
   })
 })
