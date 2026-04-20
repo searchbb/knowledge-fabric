@@ -21,7 +21,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   title: { type: String, required: true },
@@ -55,7 +55,25 @@ const isOpen = computed(() => {
   return props.defaultOpen
 })
 
+// When Vue is about to programmatically flip the `open` attribute via our
+// :open binding (e.g. forceOpen going true mid-session after a 6s poll
+// surfaces a new errored item), the <details> element fires a `toggle`
+// event that looks identical to a user click. Without this guard, the
+// programmatic toggle would get recorded as "user touched it," which
+// permanently defeats the `forceOpen && !touched` gate — so after errors
+// clear, the card would stay sticky-open even though the user never
+// interacted. The flag arms when isOpen flips and disarms on the next
+// toggle event.
+const suppressNextToggle = ref(false)
+watch(isOpen, () => {
+  suppressNextToggle.value = true
+})
+
 function onToggle(event) {
+  if (suppressNextToggle.value) {
+    suppressNextToggle.value = false
+    return
+  }
   const open = event.target.open
   stored.value = open ? 'open' : 'closed'
   touched.value = true

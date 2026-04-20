@@ -806,6 +806,36 @@ describe('AutoPipelinePage', () => {
     expect(serviceMock.mock.calls.length).toBeGreaterThan(liveHits)
   })
 
+  it('auto-expands the errored bucket when there are errored items', async () => {
+    // The errored bucket wraps in a CollapsibleCard with
+    // `force-open="displayBuckets.errored.length > 0"`. On mount with
+    // errored items present and no localStorage entry, the card should
+    // start in the open state so the user sees the failure immediately.
+    const router = makeMockRouter({
+      'get /api/auto/pending-urls': {
+        data: {
+          pending: [],
+          in_flight: [],
+          processed: [],
+          errored: [
+            { url_fingerprint: 'x', url: 'https://err', finished_at: '2026-04-20T00:00:00', error: 'boom' },
+          ],
+        },
+      },
+    })
+    serviceMock.mockImplementation(router)
+    setMode('live')
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    const errored = wrapper.find('[data-test="bucket-errored"]')
+    expect(errored.exists()).toBe(true)
+    expect(errored.element.open).toBe(true)
+  })
+
   it('sorts all four buckets newest-first', async () => {
     const router = makeMockRouter({
       'get /api/auto/pending-urls': {

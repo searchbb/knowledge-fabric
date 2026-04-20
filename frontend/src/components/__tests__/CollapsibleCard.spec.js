@@ -19,6 +19,18 @@ beforeEach(() => {
   localStorage.clear()
 })
 
+// jsdom doesn't implement the native <details> click→toggle default
+// action, so a plain summary click doesn't flip details.open or fire a
+// toggle event. This helper simulates what a real browser does when a
+// user clicks a summary: flip open, then dispatch the toggle event that
+// the component's `@toggle` handler actually listens for.
+async function userToggle(wrapper) {
+  const details = wrapper.find('details').element
+  details.open = !details.open
+  details.dispatchEvent(new Event('toggle'))
+  await wrapper.vm.$nextTick()
+}
+
 describe('CollapsibleCard', () => {
   it('renders closed by default when defaultOpen is false', () => {
     const wrapper = mount(CollapsibleCard, {
@@ -48,12 +60,37 @@ describe('CollapsibleCard', () => {
     const wrapper = mount(CollapsibleCard, {
       props: { storageKey: 'test:d', title: 'X' },
     })
-    const details = wrapper.find('details').element
-    details.open = true
-    details.dispatchEvent(new Event('toggle'))
-    await wrapper.vm.$nextTick()
+    await userToggle(wrapper)
     expect(localStorage.getItem('test:d')).toBe('open')
     expect(localStorage.getItem('test:d:touched')).toBe('1')
+  })
+
+  it('does not mark touched when forceOpen causes a programmatic open', async () => {
+    // Mount with forceOpen=false initially, then flip to true via prop
+    // update. This simulates errored.length going 0 → 1 via a backend
+    // poll — the programmatic toggle that follows must NOT count as a
+    // user gesture, otherwise the forceOpen gate is defeated forever.
+    const wrapper = mount(CollapsibleCard, {
+      props: { storageKey: 'test:prog', title: 'X', forceOpen: false },
+    })
+    expect(wrapper.find('details').element.open).toBe(false)
+    expect(localStorage.getItem('test:prog:touched')).toBe(null)
+
+    // Programmatic open via forceOpen flip. Vue updates the :open
+    // binding, which (in a real browser) would fire a toggle event.
+    // Simulate that here so the component's suppression path runs.
+    await wrapper.setProps({ forceOpen: true })
+    expect(wrapper.find('details').element.open).toBe(true)
+    wrapper.find('details').element.dispatchEvent(new Event('toggle'))
+    await wrapper.vm.$nextTick()
+
+    // Programmatic open must NOT mark user as having touched.
+    expect(localStorage.getItem('test:prog:touched')).toBe(null)
+    expect(localStorage.getItem('test:prog')).toBe(null)
+
+    // A real user gesture afterwards IS still recorded as a touch.
+    await userToggle(wrapper)
+    expect(localStorage.getItem('test:prog:touched')).toBe('1')
   })
 
   it('forceOpen overrides defaultOpen before user touches it', () => {
@@ -112,14 +149,11 @@ describe('CollapsibleCard', () => {
   })
 
   it('round-trips toggle state through localStorage across mounts', async () => {
-    // First mount: toggle open, then tear down.
+    // First mount: user clicks open, then tear down.
     const first = mount(CollapsibleCard, {
       props: { storageKey: 'test:roundtrip', title: 'X' },
     })
-    const details = first.find('details').element
-    details.open = true
-    details.dispatchEvent(new Event('toggle'))
-    await first.vm.$nextTick()
+    await userToggle(first)
     first.unmount()
 
     // Second mount with the same key: should come up open.

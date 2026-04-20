@@ -138,7 +138,8 @@
     <!-- 5. 待处理 bucket (primary actionable queue, stays expanded) -->
     <article class="bucket-card">
       <div class="bucket-header">
-        <div class="card-title">待处理 ({{ displayBuckets.pending.length }})</div>
+        <div class="card-title">待处理</div>
+        <span class="pending-count-badge">{{ displayBuckets.pending.length }}</span>
       </div>
       <div v-if="!displayBuckets.pending.length" class="empty-note">队列空。把 URL 贴到上面的输入框加入。</div>
       <div v-else class="bucket-list">
@@ -260,7 +261,7 @@
             :disabled="discoverBusyJobs.has(job.job_id)"
             @click.stop="retryDiscoverJob(job.job_id)"
           >
-            {{ discoverBusyJobs.has(job.job_id) ? '处理中...' : '重试' }}
+            {{ discoverBusyJobs.has(job.job_id) ? '重试中...' : '重试' }}
           </button>
           <button
             v-if="canCancel(job.status)"
@@ -1690,6 +1691,19 @@ watch(appMode, async () => {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+/* Pending bucket count badge — mirrors CollapsibleCard's `.cc-badge` so
+   the un-wrapped 待处理 header has the same visual rhythm as the wrapped
+   buckets' titles. */
+.pending-count-badge {
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  line-height: 1.5;
+  margin-right: auto;
 }
 .btn-bucket {
   border-radius: 8px;
