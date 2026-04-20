@@ -65,8 +65,9 @@
          /api/auto/pending-notes → same drain path as URL articles. -->
     <NotePasteCard @submitted="loadQueue" />
 
-    <!-- 4. Run pending + live progress. Run-results history will be
-         wrapped in CollapsibleCard in a later task. -->
+    <!-- 4. Run pending + live progress. Run-results history is tucked
+         behind a nested CollapsibleCard (flat styling) so the button +
+         live panel stay visible while past runs collapse by default. -->
     <article class="action-card">
       <div class="card-title">运行待处理</div>
       <p class="section-copy mini-copy">
@@ -104,25 +105,34 @@
         正在初始化...（稍等几秒就会显示实时进度）
       </div>
 
-      <div v-if="runResult" class="run-result">
-        <div class="metric-line">总运行：{{ runResult.total_runs }}</div>
-        <div
-          v-for="run in runResult.runs"
-          :key="run.run_id"
-          :class="['run-row', runSeverityClass(run.status)]"
-        >
-          <div class="run-topline">
-            <span class="run-status">{{ runStatusLabel(run.status) }}</span>
-            <span class="run-url">{{ run.url }}</span>
+      <CollapsibleCard
+        v-if="runResult"
+        title="运行历史"
+        :badge="runResult.total_runs"
+        storage-key="auto-pipeline:collapse:run-results"
+        :default-open="false"
+        class="nested-collapsible"
+        data-test="run-results"
+      >
+        <div class="run-result">
+          <div
+            v-for="run in runResult.runs"
+            :key="run.run_id"
+            :class="['run-row', runSeverityClass(run.status)]"
+          >
+            <div class="run-topline">
+              <span class="run-status">{{ runStatusLabel(run.status) }}</span>
+              <span class="run-url">{{ run.url }}</span>
+            </div>
+            <div class="run-meta">
+              {{ runDurationLabel(run.duration_ms) }}
+              <template v-if="run.project_id"> · 项目 {{ run.project_id }}</template>
+              <template v-if="run.phase"> · 阶段 {{ run.phase }}</template>
+            </div>
+            <div v-if="run.error" class="run-error">{{ run.error }}</div>
           </div>
-          <div class="run-meta">
-            {{ runDurationLabel(run.duration_ms) }}
-            <template v-if="run.project_id"> · 项目 {{ run.project_id }}</template>
-            <template v-if="run.phase"> · 阶段 {{ run.phase }}</template>
-          </div>
-          <div v-if="run.error" class="run-error">{{ run.error }}</div>
         </div>
-      </div>
+      </CollapsibleCard>
     </article>
 
     <!-- 5. 待处理 bucket (primary actionable queue, stays expanded) -->
@@ -1649,7 +1659,6 @@ watch(appMode, async () => {
 }
 
 .run-result { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
-.metric-line { color: #5a6573; font-size: 13px; }
 .run-row { border: 1px solid #d4dce8; border-radius: 12px; padding: 12px 14px; background: #fff; }
 .run-row.run-ok { border-left: 4px solid #2e7d32; }
 .run-row.run-err { border-left: 4px solid #c62828; background: #fff8f6; }
@@ -1861,5 +1870,17 @@ watch(appMode, async () => {
 .dc-inline-chip--warn {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.nested-collapsible {
+  border: none;
+  background: transparent;
+  margin: 8px 0 0 0;
+}
+.nested-collapsible :deep(.cc-summary) {
+  padding: 8px 0;
+}
+.nested-collapsible :deep(.cc-body) {
+  padding: 4px 0 0 0;
 }
 </style>
