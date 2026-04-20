@@ -828,10 +828,10 @@ describe('AutoPipelinePage', () => {
 
     const bucketLists = wrapper.findAll('.bucket-card .bucket-list')
     expect(bucketLists).toHaveLength(4)
-    // bucketPanels order: pending, in_flight, processed, errored
+    // DOM order per spec §3: pending, errored, in_flight, processed
     expect(bucketLists[0].text()).toMatch(/new\.example\/b[\s\S]*old\.example\/a/)
-    expect(bucketLists[1].text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
-    expect(bucketLists[2].text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
-    expect(bucketLists[3].text()).toMatch(/err-new[\s\S]*err-old/)
+    expect(bucketLists[1].text()).toMatch(/err-new[\s\S]*err-old/)
+    expect(bucketLists[2].text()).toMatch(/https:\/\/d[\s\S]*https:\/\/c/)
+    expect(bucketLists[3].text()).toMatch(/https:\/\/f[\s\S]*https:\/\/e/)
   })
 })

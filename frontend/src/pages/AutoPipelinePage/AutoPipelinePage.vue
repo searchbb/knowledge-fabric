@@ -19,7 +19,329 @@
 
     <div v-if="error" class="state-card error-card">{{ error }}</div>
 
-    <!-- LLM 抽取模式开关 (2026-04-15: 本地 qwen3 太慢 → 支持切百炼在线 DashScope qwen3.5-plus) -->
+    <!-- 1. Stats: always visible (page-level health at a glance) -->
+    <div class="summary-grid">
+      <article class="card">
+        <div class="card-title">待处理</div>
+        <div class="metric-value">{{ buckets.pending.length }}</div>
+      </article>
+      <article class="card">
+        <div class="card-title">执行中</div>
+        <div class="metric-value">{{ buckets.in_flight.length }}</div>
+      </article>
+      <article class="card">
+        <div class="card-title">已完成</div>
+        <div class="metric-value">{{ buckets.processed.length }}</div>
+      </article>
+      <article class="card">
+        <div class="card-title">失败</div>
+        <div class="metric-value">{{ buckets.errored.length }}</div>
+      </article>
+    </div>
+
+    <!-- 2. Add URL form -->
+    <article class="action-card">
+      <div class="card-title">加入新 URL</div>
+      <p class="section-copy mini-copy">
+        支持微信公众号 / Medium / Notion / 普通 HTML 链接。重复链接（按指纹判断）会自动去重。
+      </p>
+      <div class="add-row">
+        <input
+          v-model="newUrl"
+          type="text"
+          class="form-input"
+          placeholder="https://mp.weixin.qq.com/s/..."
+          @keyup.enter="addUrl"
+        />
+        <button class="btn-primary" :disabled="adding || !newUrl.trim()" @click="addUrl">
+          {{ adding ? '加入中...' : '加入队列' }}
+        </button>
+      </div>
+      <div v-if="addResult" :class="['add-result', addResult.kind]">{{ addResult.text }}</div>
+    </article>
+
+    <!-- 3. Rich-text paste entry (2026-04-20): paste from WeChat /
+         Twitter / Feishu / clipboard → Turndown → MD →
+         /api/auto/pending-notes → same drain path as URL articles. -->
+    <NotePasteCard @submitted="loadQueue" />
+
+    <!-- 4. Run pending + live progress. Run-results history will be
+         wrapped in CollapsibleCard in a later task. -->
+    <article class="action-card">
+      <div class="card-title">运行待处理</div>
+      <p class="section-copy mini-copy">
+        同步触发一次 drain。每个 URL 有独立的 20 分钟总超时 + 4 分钟无进度保护，卡住的 URL 会被自动 cancel 并标为失败，不阻塞后续。
+      </p>
+      <div class="action-row">
+        <button
+          class="btn-primary"
+          :disabled="running || buckets.pending.length === 0"
+          @click="runPending"
+        >
+          {{ running ? '执行中...' : `运行 ${buckets.pending.length} 条待处理` }}
+        </button>
+        <button class="btn-small" :disabled="loading" @click="loadQueue">刷新队列</button>
+      </div>
+
+      <div v-if="hasInFlightDrain && activeTaskSnapshot" class="live-progress">
+        <div class="live-topline">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span class="live-label">实时进度</span>
+          <span class="live-percent">{{ activeTaskSnapshot.progress }}%</span>
+        </div>
+        <div class="live-bar-track">
+          <div class="live-bar-fill" :style="{ width: (activeTaskSnapshot.progress || 0) + '%' }"></div>
+        </div>
+        <div v-if="inFlightUrl" class="live-url">{{ inFlightUrl }}</div>
+        <div class="live-message">{{ activeTaskSnapshot.message || '准备中...' }}</div>
+        <div class="live-meta">
+          任务 {{ shortTaskId(activeTaskSnapshot.task_id) }}
+          <template v-if="activeTaskSnapshot.task_type"> · {{ activeTaskSnapshot.task_type }}</template>
+        </div>
+      </div>
+      <div v-else-if="hasInFlightDrain" class="live-progress live-progress--waiting">
+        <span class="live-dot" aria-hidden="true"></span>
+        正在初始化...（稍等几秒就会显示实时进度）
+      </div>
+
+      <div v-if="runResult" class="run-result">
+        <div class="metric-line">总运行：{{ runResult.total_runs }}</div>
+        <div
+          v-for="run in runResult.runs"
+          :key="run.run_id"
+          :class="['run-row', runSeverityClass(run.status)]"
+        >
+          <div class="run-topline">
+            <span class="run-status">{{ runStatusLabel(run.status) }}</span>
+            <span class="run-url">{{ run.url }}</span>
+          </div>
+          <div class="run-meta">
+            {{ runDurationLabel(run.duration_ms) }}
+            <template v-if="run.project_id"> · 项目 {{ run.project_id }}</template>
+            <template v-if="run.phase"> · 阶段 {{ run.phase }}</template>
+          </div>
+          <div v-if="run.error" class="run-error">{{ run.error }}</div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 5. 待处理 bucket (primary actionable queue, stays expanded) -->
+    <article class="bucket-card">
+      <div class="bucket-header">
+        <div class="card-title">待处理 ({{ displayBuckets.pending.length }})</div>
+      </div>
+      <div v-if="!displayBuckets.pending.length" class="empty-note">队列空。把 URL 贴到上面的输入框加入。</div>
+      <div v-else class="bucket-list">
+        <div v-for="item in displayBuckets.pending" :key="itemKey(item)" class="bucket-row">
+          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+          <div class="bucket-meta">
+            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+          </div>
+          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+          <div class="bucket-actions">
+            <button
+              class="btn-cancel"
+              :disabled="cancelingFingerprints.has(item.url_fingerprint)"
+              @click="cancelPending(item)"
+            >
+              {{ cancelingFingerprints.has(item.url_fingerprint) ? '取消中...' : '取消' }}
+            </button>
+            <span
+              v-if="cancelResults[item.url_fingerprint]"
+              :class="['retry-note', cancelResults[item.url_fingerprint].kind]"
+            >
+              {{ cancelResults[item.url_fingerprint].text }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 6. Discover queue card (will be wrapped in CollapsibleCard in a later task) -->
+    <article class="card discover-card">
+      <div class="discover-head">
+        <div class="card-title">Discover 队列 · 跨文章关系发现</div>
+        <span class="discover-total">共 {{ discoverStats.total }} 条</span>
+      </div>
+      <p class="section-copy mini-copy">
+        文章主流程不再等这一步。每篇新文章会在这里落一条待办，后台或手动运行去兑现它。
+      </p>
+      <div class="discover-counts">
+        <div class="dc-metric"><span class="dc-label">待办</span><span class="dc-value">{{ discoverStats.by_status.pending || 0 }}</span></div>
+        <div class="dc-metric"><span class="dc-label">运行中</span><span class="dc-value">{{ discoverStats.by_status.running || 0 }}</span></div>
+        <div class="dc-metric"><span class="dc-label">完成</span><span class="dc-value">{{ discoverStats.by_status.completed || 0 }}</span></div>
+        <div class="dc-metric"><span class="dc-label">部分完成</span><span class="dc-value">{{ discoverStats.by_status.partial || 0 }}</span></div>
+        <div class="dc-metric"><span class="dc-label">失败</span><span class="dc-value dc-value--warn">{{ discoverStats.by_status.failed || 0 }}</span></div>
+      </div>
+      <div class="action-row discover-actions">
+        <button
+          class="btn-small"
+          :disabled="discoverRunning || (discoverStats.by_status.pending || 0) === 0"
+          @click="runOneDiscover"
+        >
+          {{ discoverRunning ? '运行中...' : '手动运行一条' }}
+        </button>
+        <button class="btn-small" :disabled="discoverRunning" @click="refreshDiscover">刷新</button>
+        <span v-if="discoverLastResult" :class="['retry-note', discoverLastResult.kind]">
+          {{ discoverLastResult.text }}
+        </span>
+      </div>
+
+      <!-- Cooldown / budget throttle alert (P4 audit follow-up
+           2026-04-17). Only rendered when something was actually
+           blocked in the last hour, so a healthy queue doesn't get a
+           noisy banner. -->
+      <div v-if="discoverSkips.total > 0" class="discover-skip-alert">
+        <div class="skip-alert-head">
+          <span class="skip-alert-icon" aria-hidden="true">⚠</span>
+          <span class="skip-alert-title">
+            过去 1 小时有 {{ discoverSkips.total }} 次调度被拦截
+          </span>
+        </div>
+        <div class="skip-alert-breakdown">
+          <span v-if="discoverSkips.by_kind.theme_cooldown" class="skip-chip">主题冷却 {{ discoverSkips.by_kind.theme_cooldown }}</span>
+          <span v-if="discoverSkips.by_kind.daily_budget" class="skip-chip">日预算 {{ discoverSkips.by_kind.daily_budget }}</span>
+          <span v-if="discoverSkips.by_kind.other" class="skip-chip">其他 {{ discoverSkips.by_kind.other }}</span>
+        </div>
+        <div v-if="discoverSkips.latest" class="skip-alert-latest" :title="discoverSkips.latest.reason">
+          最近一次：{{ discoverSkips.latest.reason }}
+        </div>
+      </div>
+
+      <!-- Job list: only surface jobs that need attention. Completed
+           ones live in the counters above so we don't bloat this list
+           with the long tail of successful runs. -->
+      <div v-if="discoverAttentionJobs.length > 0" class="discover-jobs">
+        <div class="discover-jobs-title">需要关注的任务 ({{ discoverAttentionJobs.length }})</div>
+        <div
+          v-for="job in discoverAttentionJobs"
+          :key="job.job_id"
+          class="discover-job-row discover-job-row--clickable"
+          role="button"
+          tabindex="0"
+          @click="openJobDrawer(job.job_id)"
+          @keyup.enter="openJobDrawer(job.job_id)"
+        >
+          <span :class="['dj-status', `dj-status--${job.status}`]">{{ discoverStatusLabel(job.status) }}</span>
+          <span class="dj-id" :title="job.job_id">{{ shortJobId(job.job_id) }}</span>
+          <span v-if="job.last_error" class="dj-error" :title="job.last_error">{{ job.last_error }}</span>
+          <span v-else-if="job.new_entry_ids && job.new_entry_ids.length" class="dj-meta">
+            {{ job.new_entry_ids.length }} 个新概念
+          </span>
+          <span class="dj-spacer"></span>
+          <!-- Action buttons stop propagation so clicking them doesn't
+               also open the drawer. -->
+          <button
+            v-if="canRetry(job.status)"
+            class="btn-tiny"
+            :disabled="discoverBusyJobs.has(job.job_id)"
+            @click.stop="retryDiscoverJob(job.job_id)"
+          >
+            {{ discoverBusyJobs.has(job.job_id) ? '处理中...' : '重试' }}
+          </button>
+          <button
+            v-if="canCancel(job.status)"
+            class="btn-tiny btn-tiny--danger"
+            :disabled="discoverBusyJobs.has(job.job_id)"
+            @click.stop="cancelDiscoverJob(job.job_id)"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </article>
+
+    <!-- 7. 失败 bucket -->
+    <article class="bucket-card">
+      <div class="bucket-header">
+        <div class="card-title">失败 ({{ displayBuckets.errored.length }})</div>
+        <div v-if="displayBuckets.errored.length > 0" class="bucket-header-actions">
+          <button class="btn-bucket btn-bucket-retry" :disabled="!!bulkBusy" @click="retryAllErrored">
+            {{ bulkBusy === 'retry' ? '重试中...' : '一键重试失败' }}
+          </button>
+          <button class="btn-bucket btn-bucket-clear" :disabled="!!bulkBusy" @click="clearAllErrored">
+            {{ bulkBusy === 'clear' ? '清空中...' : '清空失败' }}
+          </button>
+        </div>
+      </div>
+      <div v-if="bulkResult" :class="['bulk-result', bulkResult.kind]">{{ bulkResult.text }}</div>
+      <div v-if="!displayBuckets.errored.length" class="empty-note">还没有失败记录。</div>
+      <div v-else class="bucket-list">
+        <div v-for="item in displayBuckets.errored" :key="itemKey(item)" class="bucket-row">
+          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+          <div class="bucket-meta">
+            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+          </div>
+          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+          <div class="bucket-actions">
+            <button
+              class="btn-retry"
+              :disabled="retryingFingerprints.has(item.url_fingerprint)"
+              @click="retryErrored(item)"
+            >
+              {{ retryingFingerprints.has(item.url_fingerprint) ? '重试中...' : '重试' }}
+            </button>
+            <span
+              v-if="retryResults[item.url_fingerprint]"
+              :class="['retry-note', retryResults[item.url_fingerprint].kind]"
+            >
+              {{ retryResults[item.url_fingerprint].text }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 8. 执行中 bucket -->
+    <article class="bucket-card">
+      <div class="bucket-header">
+        <div class="card-title">执行中 ({{ displayBuckets.in_flight.length }})</div>
+      </div>
+      <div v-if="!displayBuckets.in_flight.length" class="empty-note">当前没有进行中的任务。</div>
+      <div v-else class="bucket-list">
+        <div v-for="item in displayBuckets.in_flight" :key="itemKey(item)" class="bucket-row">
+          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+          <div class="bucket-meta">
+            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+          </div>
+          <div v-if="item.phase" class="phase-badge-row">
+            <span class="phase-badge">{{ item.phase }}</span>
+          </div>
+          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 9. 已完成 bucket -->
+    <article class="bucket-card">
+      <div class="bucket-header">
+        <div class="card-title">已完成 ({{ displayBuckets.processed.length }})</div>
+      </div>
+      <div v-if="!displayBuckets.processed.length" class="empty-note">还没有成功处理过任何 URL。</div>
+      <div v-else class="bucket-list">
+        <div v-for="item in displayBuckets.processed" :key="itemKey(item)" class="bucket-row">
+          <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
+          <div class="bucket-meta">
+            <template v-if="item.project_id">项目 {{ item.project_id }}</template>
+            <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
+            <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
+            <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
+          </div>
+          <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
+        </div>
+      </div>
+    </article>
+
+    <!-- 10. LLM 抽取模式（配置，沉底） -->
     <article class="mode-card">
       <div class="mode-header">
         <div>
@@ -31,7 +353,6 @@
         </div>
         <div v-if="mode.loading" class="mode-loading">加载中...</div>
       </div>
-
       <div class="mode-switch-row" v-if="!mode.loading">
         <button
           :class="['mode-btn', mode.current === 'local' ? 'mode-btn-active' : '']"
@@ -55,153 +376,12 @@
           </span>
         </button>
       </div>
-
-      <div v-if="mode.message" :class="['mode-result', mode.messageKind]">
-        {{ mode.message }}
-      </div>
+      <div v-if="mode.message" :class="['mode-result', mode.messageKind]">{{ mode.message }}</div>
       <div v-if="!mode.loading" class="mode-meta">
         当前：
         <strong>{{ mode.current === 'bailian' ? '在线 百炼' : '本地 qwen3' }}</strong>
         <template v-if="mode.meta.updated_at"> · 最近更新 {{ mode.meta.updated_at }}</template>
         <template v-if="mode.meta.in_flight_count > 0"> · 有 {{ mode.meta.in_flight_count }} 个任务在跑，暂不能切换</template>
-      </div>
-    </article>
-
-    <!-- Stats row -->
-    <div class="summary-grid">
-      <article class="card">
-        <div class="card-title">待处理</div>
-        <div class="metric-value">{{ buckets.pending.length }}</div>
-      </article>
-      <article class="card">
-        <div class="card-title">执行中</div>
-        <div class="metric-value">{{ buckets.in_flight.length }}</div>
-      </article>
-      <article class="card">
-        <div class="card-title">已完成</div>
-        <div class="metric-value">{{ buckets.processed.length }}</div>
-      </article>
-      <article class="card">
-        <div class="card-title">失败</div>
-        <div class="metric-value">{{ buckets.errored.length }}</div>
-      </article>
-    </div>
-
-    <!-- Discover queue status (Discover V2 / P1.4) -->
-    <!-- Separated visually from the main "文章处理" bucket cards above.
-         Those four cards track URL-level lifecycle; this card tracks the
-         *background* cross-concept discover queue, which is a completely
-         different workload (enrich, not gate). -->
-    <article class="card discover-card">
-      <div class="discover-head">
-        <div class="card-title">Discover 队列 · 跨文章关系发现</div>
-        <span class="discover-total">共 {{ discoverStats.total }} 条</span>
-      </div>
-      <p class="section-copy mini-copy">
-        文章主流程不再等这一步。每篇新文章会在这里落一条待办，后台或手动运行去兑现它。
-      </p>
-      <div class="discover-counts">
-        <div class="dc-metric">
-          <span class="dc-label">待办</span>
-          <span class="dc-value">{{ discoverStats.by_status.pending || 0 }}</span>
-        </div>
-        <div class="dc-metric">
-          <span class="dc-label">运行中</span>
-          <span class="dc-value">{{ discoverStats.by_status.running || 0 }}</span>
-        </div>
-        <div class="dc-metric">
-          <span class="dc-label">完成</span>
-          <span class="dc-value">{{ discoverStats.by_status.completed || 0 }}</span>
-        </div>
-        <div class="dc-metric">
-          <span class="dc-label">部分完成</span>
-          <span class="dc-value">{{ discoverStats.by_status.partial || 0 }}</span>
-        </div>
-        <div class="dc-metric">
-          <span class="dc-label">失败</span>
-          <span class="dc-value dc-value--warn">{{ discoverStats.by_status.failed || 0 }}</span>
-        </div>
-      </div>
-      <div class="action-row discover-actions">
-        <button
-          class="btn-small"
-          :disabled="discoverRunning || (discoverStats.by_status.pending || 0) === 0"
-          @click="runOneDiscover"
-        >
-          {{ discoverRunning ? '运行中...' : '手动运行一条' }}
-        </button>
-        <button class="btn-small" :disabled="discoverRunning" @click="refreshDiscover">刷新</button>
-        <span v-if="discoverLastResult" :class="['retry-note', discoverLastResult.kind]">
-          {{ discoverLastResult.text }}
-        </span>
-      </div>
-
-      <!-- Cooldown / budget throttle alert (P4 audit follow-up 2026-04-17).
-           Only rendered when something was actually blocked in the last
-           hour, so a healthy queue doesn't get a noisy banner. -->
-      <div v-if="discoverSkips.total > 0" class="discover-skip-alert">
-        <div class="skip-alert-head">
-          <span class="skip-alert-icon" aria-hidden="true">⚠</span>
-          <span class="skip-alert-title">
-            过去 1 小时有 {{ discoverSkips.total }} 次调度被拦截
-          </span>
-        </div>
-        <div class="skip-alert-breakdown">
-          <span v-if="discoverSkips.by_kind.theme_cooldown" class="skip-chip">
-            主题冷却 {{ discoverSkips.by_kind.theme_cooldown }}
-          </span>
-          <span v-if="discoverSkips.by_kind.daily_budget" class="skip-chip">
-            日预算 {{ discoverSkips.by_kind.daily_budget }}
-          </span>
-          <span v-if="discoverSkips.by_kind.other" class="skip-chip">
-            其他 {{ discoverSkips.by_kind.other }}
-          </span>
-        </div>
-        <div v-if="discoverSkips.latest" class="skip-alert-latest" :title="discoverSkips.latest.reason">
-          最近一次：{{ discoverSkips.latest.reason }}
-        </div>
-      </div>
-
-      <!-- Job list: only surface jobs that need attention. Completed ones
-           live in the counters above so we don't bloat this list with the
-           long tail of successful runs. -->
-      <div v-if="discoverAttentionJobs.length > 0" class="discover-jobs">
-        <div class="discover-jobs-title">需要关注的任务 ({{ discoverAttentionJobs.length }})</div>
-        <div
-          v-for="job in discoverAttentionJobs"
-          :key="job.job_id"
-          class="discover-job-row discover-job-row--clickable"
-          role="button"
-          tabindex="0"
-          @click="openJobDrawer(job.job_id)"
-          @keyup.enter="openJobDrawer(job.job_id)"
-        >
-          <span :class="['dj-status', `dj-status--${job.status}`]">{{ discoverStatusLabel(job.status) }}</span>
-          <span class="dj-id" :title="job.job_id">{{ shortJobId(job.job_id) }}</span>
-          <span v-if="job.last_error" class="dj-error" :title="job.last_error">{{ job.last_error }}</span>
-          <span v-else-if="job.new_entry_ids && job.new_entry_ids.length" class="dj-meta">
-            {{ job.new_entry_ids.length }} 个新概念
-          </span>
-          <span class="dj-spacer"></span>
-          <!-- Action buttons stop propagation so clicking them doesn't also
-               open the drawer. -->
-          <button
-            v-if="canRetry(job.status)"
-            class="btn-tiny"
-            :disabled="discoverBusyJobs.has(job.job_id)"
-            @click.stop="retryDiscoverJob(job.job_id)"
-          >
-            {{ discoverBusyJobs.has(job.job_id) ? '处理中...' : '重试' }}
-          </button>
-          <button
-            v-if="canCancel(job.status)"
-            class="btn-tiny btn-tiny--danger"
-            :disabled="discoverBusyJobs.has(job.job_id)"
-            @click.stop="cancelDiscoverJob(job.job_id)"
-          >
-            取消
-          </button>
-        </div>
       </div>
     </article>
 
@@ -322,186 +502,6 @@
           </section>
         </div>
       </aside>
-    </div>
-
-    <!-- Add URL form -->
-    <article class="action-card">
-      <div class="card-title">加入新 URL</div>
-      <p class="section-copy mini-copy">
-        支持微信公众号 / Medium / Notion / 普通 HTML 链接。重复链接（按指纹判断）会自动去重。
-      </p>
-      <div class="add-row">
-        <input
-          v-model="newUrl"
-          type="text"
-          class="form-input"
-          placeholder="https://mp.weixin.qq.com/s/..."
-          @keyup.enter="addUrl"
-        />
-        <button class="btn-primary" :disabled="adding || !newUrl.trim()" @click="addUrl">
-          {{ adding ? '加入中...' : '加入队列' }}
-        </button>
-      </div>
-      <div v-if="addResult" :class="['add-result', addResult.kind]">{{ addResult.text }}</div>
-    </article>
-
-    <!-- Rich-text paste entry (2026-04-20): paste from WeChat / Twitter /
-         Feishu / clipboard → Turndown → MD → /api/auto/pending-notes →
-         same drain path as URL articles. -->
-    <NotePasteCard @submitted="loadQueue" />
-
-    <!-- Run button -->
-    <article class="action-card">
-      <div class="card-title">运行待处理</div>
-      <p class="section-copy mini-copy">
-        同步触发一次 drain。每个 URL 有独立的 20 分钟总超时 + 4 分钟无进度保护，卡住的 URL 会被自动 cancel 并标为失败，不阻塞后续。
-      </p>
-      <div class="action-row">
-        <button
-          class="btn-primary"
-          :disabled="running || buckets.pending.length === 0"
-          @click="runPending"
-        >
-          {{ running ? '执行中...' : `运行 ${buckets.pending.length} 条待处理` }}
-        </button>
-        <button class="btn-small" :disabled="loading" @click="loadQueue">刷新队列</button>
-      </div>
-
-      <!-- Gap #11 fix: live progress panel. Renders whenever there's an
-           in-flight URL in the queue (i.e. a drain is active) AND we
-           have a concrete build task to report on — this matters so a
-           second browser tab opening /workspace/auto still sees the
-           running drain, not just the tab that clicked the button. -->
-      <div
-        v-if="hasInFlightDrain && activeTaskSnapshot"
-        class="live-progress"
-      >
-        <div class="live-topline">
-          <span class="live-dot" aria-hidden="true"></span>
-          <span class="live-label">实时进度</span>
-          <span class="live-percent">{{ activeTaskSnapshot.progress }}%</span>
-        </div>
-        <div class="live-bar-track">
-          <div
-            class="live-bar-fill"
-            :style="{ width: (activeTaskSnapshot.progress || 0) + '%' }"
-          ></div>
-        </div>
-        <div v-if="inFlightUrl" class="live-url">{{ inFlightUrl }}</div>
-        <div class="live-message">{{ activeTaskSnapshot.message || '准备中...' }}</div>
-        <div class="live-meta">
-          任务 {{ shortTaskId(activeTaskSnapshot.task_id) }}
-          <template v-if="activeTaskSnapshot.task_type"> · {{ activeTaskSnapshot.task_type }}</template>
-        </div>
-      </div>
-      <div v-else-if="hasInFlightDrain" class="live-progress live-progress--waiting">
-        <span class="live-dot" aria-hidden="true"></span>
-        正在初始化...（稍等几秒就会显示实时进度）
-      </div>
-      <div v-if="runResult" class="run-result">
-        <div class="metric-line">总运行：{{ runResult.total_runs }}</div>
-        <div
-          v-for="run in runResult.runs"
-          :key="run.run_id"
-          :class="['run-row', runSeverityClass(run.status)]"
-        >
-          <div class="run-topline">
-            <span class="run-status">{{ runStatusLabel(run.status) }}</span>
-            <span class="run-url">{{ run.url }}</span>
-          </div>
-          <div class="run-meta">
-            {{ runDurationLabel(run.duration_ms) }}
-            <template v-if="run.project_id"> · 项目 {{ run.project_id }}</template>
-            <template v-if="run.phase"> · 阶段 {{ run.phase }}</template>
-          </div>
-          <div v-if="run.error" class="run-error">{{ run.error }}</div>
-        </div>
-      </div>
-    </article>
-
-    <!-- Buckets -->
-    <div class="buckets">
-      <article v-for="bucket in bucketPanels" :key="bucket.key" class="bucket-card">
-        <div class="bucket-header">
-          <div class="card-title">
-            {{ bucket.title }} ({{ displayBuckets[bucket.key].length }})
-          </div>
-          <div
-            v-if="bucket.key === 'errored' && displayBuckets.errored.length > 0"
-            class="bucket-header-actions"
-          >
-            <button
-              class="btn-bucket btn-bucket-retry"
-              :disabled="!!bulkBusy"
-              @click="retryAllErrored"
-            >
-              {{ bulkBusy === 'retry' ? '重试中...' : '一键重试失败' }}
-            </button>
-            <button
-              class="btn-bucket btn-bucket-clear"
-              :disabled="!!bulkBusy"
-              @click="clearAllErrored"
-            >
-              {{ bulkBusy === 'clear' ? '清空中...' : '清空失败' }}
-            </button>
-          </div>
-        </div>
-        <div
-          v-if="bucket.key === 'errored' && bulkResult"
-          :class="['bulk-result', bulkResult.kind]"
-        >
-          {{ bulkResult.text }}
-        </div>
-        <div v-if="!displayBuckets[bucket.key].length" class="empty-note">{{ bucket.emptyText }}</div>
-        <div v-else class="bucket-list">
-          <div v-for="item in displayBuckets[bucket.key]" :key="itemKey(item)" class="bucket-row">
-            <div class="bucket-url">{{ item.url || item.md_path || item.url_fingerprint }}</div>
-            <div class="bucket-meta">
-              <template v-if="item.project_id">项目 {{ item.project_id }}</template>
-              <template v-if="item.run_id"> · run {{ shortRunId(item.run_id) }}</template>
-              <template v-if="item.attempt != null"> · 尝试 {{ item.attempt }}</template>
-              <template v-if="item.duration_ms"> · 耗时 {{ runDurationLabel(item.duration_ms) }}</template>
-            </div>
-            <!-- In-flight: show phase as a prominent badge -->
-            <div v-if="bucket.key === 'in_flight' && item.phase" class="phase-badge-row">
-              <span class="phase-badge">{{ item.phase }}</span>
-            </div>
-            <div v-if="item.error" class="bucket-error">{{ item.error }}</div>
-            <!-- Pending: cancel button -->
-            <div v-if="bucket.key === 'pending'" class="bucket-actions">
-              <button
-                class="btn-cancel"
-                :disabled="cancelingFingerprints.has(item.url_fingerprint)"
-                @click="cancelPending(item)"
-              >
-                {{ cancelingFingerprints.has(item.url_fingerprint) ? '取消中...' : '取消' }}
-              </button>
-              <span
-                v-if="cancelResults[item.url_fingerprint]"
-                :class="['retry-note', cancelResults[item.url_fingerprint].kind]"
-              >
-                {{ cancelResults[item.url_fingerprint].text }}
-              </span>
-            </div>
-            <!-- Errored: retry button -->
-            <div v-if="bucket.key === 'errored'" class="bucket-actions">
-              <button
-                class="btn-retry"
-                :disabled="retryingFingerprints.has(item.url_fingerprint)"
-                @click="retryErrored(item)"
-              >
-                {{ retryingFingerprints.has(item.url_fingerprint) ? '重试中...' : '重试' }}
-              </button>
-              <span
-                v-if="retryResults[item.url_fingerprint]"
-                :class="['retry-note', retryResults[item.url_fingerprint].kind]"
-              >
-                {{ retryResults[item.url_fingerprint].text }}
-              </span>
-            </div>
-          </div>
-        </div>
-      </article>
     </div>
 
   </div>
@@ -644,13 +644,6 @@ const bulkResult = ref(null)
 // Poll timer handle so we can tear it down when the run ends or the
 // component unmounts.
 let pollTimer = null
-
-const bucketPanels = [
-  { key: 'pending', title: '待处理', emptyText: '队列空。把 URL 贴到上面的输入框加入。' },
-  { key: 'in_flight', title: '执行中', emptyText: '当前没有进行中的任务。' },
-  { key: 'processed', title: '已完成', emptyText: '还没有成功处理过任何 URL。' },
-  { key: 'errored', title: '失败', emptyText: '还没有失败记录。' },
-]
 
 // Sorted view of the four buckets — always newest-first, so the user
 // can scan the top of any list to see the most recent activity. Each
@@ -1637,7 +1630,6 @@ watch(appMode, async () => {
 .run-meta { color: #5a6573; font-size: 12px; margin-top: 4px; }
 .run-error { color: #c62828; font-size: 12px; margin-top: 4px; }
 
-.buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-top: 16px; }
 .bucket-list { display: flex; flex-direction: column; gap: 10px; }
 .bucket-row { border: 1px solid #eef1f5; border-radius: 10px; padding: 10px 12px; background: #fff; }
 .bucket-url { font-weight: 600; color: #1d1d1d; font-size: 13px; word-break: break-all; }
