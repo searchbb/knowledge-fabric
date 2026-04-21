@@ -15,6 +15,7 @@ from flask import jsonify
 from .. import registry_bp
 from ...config import Config
 from ...models.project import ProjectManager
+from ...models.task import TaskManager
 
 
 def _read_json(filename: str) -> dict:
@@ -58,17 +59,34 @@ def workspace_overview():
         if pid:
             evo_by_project[pid] = evo_by_project.get(pid, 0) + 1
 
+    task_manager = TaskManager()
+
     summaries: list[dict[str, Any]] = []
     for project in projects:
         pid = project.project_id
         decisions = (project.concept_decisions or {}).get("items") or {}
         accepted = sum(1 for d in decisions.values() if d.get("status") in ("accepted", "canonical"))
         clusters = list(project.theme_clusters or [])
+        status = project.status.value if hasattr(project.status, "value") else str(project.status)
+
+        # When the project is still in graph_building, the flat concept_count
+        # will sit at 0 for the entire build window (concept_decisions is only
+        # populated post-build). Surface the live task progress so the overview
+        # row doesn't look identical to a finished-with-zero-concepts project.
+        build_progress = None
+        build_message = None
+        build_task_status = None
+        if status == "graph_building" and project.graph_build_task_id:
+            task = task_manager.get_task(project.graph_build_task_id)
+            if task is not None:
+                build_progress = task.progress
+                build_message = task.message
+                build_task_status = task.status.value
 
         summaries.append({
             "project_id": pid,
             "project_name": project.name,
-            "status": project.status.value if hasattr(project.status, "value") else str(project.status),
+            "status": status,
             "updated_at": project.updated_at,
             "concept_count": len(decisions),
             "accepted_concept_count": accepted,
@@ -77,6 +95,9 @@ def workspace_overview():
             "theme_cluster_count": len(clusters),
             "pending_review_count": review_by_project.get(pid, 0),
             "evolution_event_count": evo_by_project.get(pid, 0),
+            "build_progress": build_progress,
+            "build_message": build_message,
+            "build_task_status": build_task_status,
         })
 
     # Global stats

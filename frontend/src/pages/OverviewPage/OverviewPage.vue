@@ -80,6 +80,22 @@
               <span :class="['status-pill', statusPillClass(p.status)]">{{ p.status }}</span>
               <span class="project-id">{{ p.project_id }}</span>
             </div>
+            <div
+              v-if="p.status === 'graph_building' && p.build_progress != null"
+              class="build-progress"
+              :title="p.build_message || ''"
+            >
+              <div class="build-progress-bar">
+                <div
+                  class="build-progress-fill"
+                  :style="{ width: `${Math.max(2, p.build_progress || 0)}%` }"
+                />
+              </div>
+              <span class="build-progress-text">
+                {{ p.build_progress || 0 }}%
+                <span v-if="p.build_message" class="build-progress-msg">· {{ p.build_message }}</span>
+              </span>
+            </div>
           </span>
           <span class="col-num">{{ p.concept_count }}</span>
           <span class="col-num">{{ p.accepted_concept_count }}</span>
@@ -108,7 +124,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import AppShell from '../../components/common/AppShell.vue'
 import { getOverview } from '../../data/dataClient'
 import { appMode } from '../../runtime/appMode'
@@ -188,8 +204,8 @@ const filteredProjects = computed(() => {
   })
 })
 
-async function loadOverview() {
-  loading.value = true
+async function loadOverview({ silent = false } = {}) {
+  if (!silent) loading.value = true
   error.value = ''
   try {
     const res = await getOverview()
@@ -197,11 +213,35 @@ async function loadOverview() {
   } catch (e) {
     error.value = e.message || '加载失败'
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
+// Keep the build-progress column live for graph_building rows without
+// pinging the task endpoint 1× per row: just refetch the whole overview
+// on an interval while any row is still building, and stop once none
+// remain. Silent refresh so the page doesn't flicker into a loading state.
+let pollTimer = null
+function syncPolling() {
+  const building = (data.value.projects || []).some((p) => p.status === 'graph_building')
+  if (building && !pollTimer) {
+    pollTimer = setInterval(() => loadOverview({ silent: true }), 5000)
+  } else if (!building && pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+watch(() => data.value.projects, syncPolling, { deep: false })
+
 onMounted(loadOverview)
+
+onBeforeUnmount(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+})
 
 // Refetch when the user flips Live/Demo in the topbar so the page
 // reflects the new data source immediately — no full browser reload.
@@ -292,6 +332,15 @@ watch(appMode, () => {
 .status-pill.status-other,
 .status-pill.status-unknown { background: #eeeeee; color: #616161; }
 .project-id { color: var(--text-muted); font-size: 11px; }
+
+/* Live build progress for graph_building rows — concept_count is 0 during
+   the whole build window, so surfacing task progress here prevents the row
+   from looking identical to a finished-with-zero-concepts project. */
+.build-progress { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; max-width: 420px; }
+.build-progress-bar { height: 4px; background: var(--bg-muted); border-radius: 999px; overflow: hidden; }
+.build-progress-fill { height: 100%; background: #1565c0; border-radius: 999px; transition: width 0.4s ease-out; }
+.build-progress-text { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.build-progress-msg { color: var(--text-muted); }
 
 .nav-row { margin-top: 24px; display: flex; gap: 12px; }
 .btn-primary { background: var(--accent-primary); color: var(--text-on-accent); border: none; border-radius: 12px; padding: 10px 18px; font-weight: 600; cursor: pointer; font-size: 14px; text-decoration: none; }
