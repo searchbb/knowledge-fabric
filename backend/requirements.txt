@@ -1,5 +1,5 @@
 # ===========================================
-# Knowledge Fabric Backend Dependencies
+# Knowledge Fabric Center Backend Dependencies
 # ===========================================
 # Python 3.11+ required
 # 推荐用 uv: `uv sync` 会读取 pyproject.toml / uv.lock，更快且锁定版本。

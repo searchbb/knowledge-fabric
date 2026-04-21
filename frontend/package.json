@@ -1,6 +1,6 @@
 {
   "name": "knowledge-fabric-frontend",
-  "description": "Frontend app for Knowledge Fabric",
+  "description": "Frontend app for Knowledge Fabric Center",
   "private": true,
   "version": "0.1.0",
   "type": "module",

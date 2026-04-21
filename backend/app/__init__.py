@@ -1,5 +1,5 @@
 """
-Knowledge Fabric Backend - Flask应用工厂
+Knowledge Fabric Center Backend - Flask应用工厂
 """
 
 import os
@@ -36,7 +36,7 @@ def create_app(config_class=Config):
     
     if should_log_startup:
         logger.info("=" * 50)
-        logger.info("Knowledge Fabric Backend 启动中...")
+        logger.info("Knowledge Fabric Center Backend 启动中...")
         logger.info("=" * 50)
     
     # 启用CORS
@@ -87,7 +87,7 @@ def create_app(config_class=Config):
     # 健康检查
     @app.route('/health')
     def health():
-        return {'status': 'ok', 'service': 'Knowledge Fabric Backend'}
+        return {'status': 'ok', 'service': 'Knowledge Fabric Center Backend'}
     
     # Discover V2 worker (P1.2): opt-in background daemon that drains the
     # cross-concept discover job queue. Off by default so operators can
@@ -105,6 +105,6 @@ def create_app(config_class=Config):
             logger.warning(f"failed to start discover worker: {exc}")
 
     if should_log_startup:
-        logger.info("Knowledge Fabric Backend 启动完成")
+        logger.info("Knowledge Fabric Center Backend 启动完成")
 
     return app

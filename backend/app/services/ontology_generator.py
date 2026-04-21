@@ -680,7 +680,7 @@ class OntologyGenerator:
         code_lines = [
             '"""',
             '自定义实体类型定义',
-            '由Knowledge Fabric自动生成，用于技术文章认知建模',
+            '由Knowledge Fabric Center自动生成，用于技术文章认知建模',
             '"""',
             '',
             'from pydantic import Field',

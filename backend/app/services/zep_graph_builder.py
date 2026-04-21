@@ -101,7 +101,7 @@ class ZepGraphBuilderService:
         self.client.graph.create(
             graph_id=graph_id,
             name=name,
-            description="Knowledge Fabric Technical Article Graph",
+            description="Knowledge Fabric Center Technical Article Graph",
         )
         logger.info("创建 Zep 图谱: graph_id=%s, name=%s", graph_id, name)
         return graph_id

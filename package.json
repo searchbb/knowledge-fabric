@@ -1,7 +1,7 @@
 {
   "name": "knowledge-fabric",
   "version": "0.1.0",
-  "description": "Knowledge Fabric - A Knowledge Workspace for Research and Insight",
+  "description": "Knowledge Fabric Center - A Knowledge Workspace for Research and Insight",
   "scripts": {
     "setup": "npm install && cd frontend && npm install",
     "setup:backend": "cd backend && uv sync",

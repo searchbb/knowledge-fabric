@@ -1,5 +1,5 @@
 """
-Knowledge Fabric Backend 启动入口
+Knowledge Fabric Center Backend 启动入口
 """
 
 import os

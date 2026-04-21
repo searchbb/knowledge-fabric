@@ -1,11 +1,11 @@
 [project]
 name = "knowledge-fabric-backend"
 version = "0.1.0"
-description = "Backend services for Knowledge Fabric"
+description = "Backend services for Knowledge Fabric Center"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0" }
 authors = [
-    { name = "Knowledge Fabric Team" }
+    { name = "Knowledge Fabric Center Team" }
 ]
 
 dependencies = [

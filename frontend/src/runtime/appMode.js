@@ -1,4 +1,4 @@
-// Knowledge Fabric app runtime mode.
+// Knowledge Fabric Center app runtime mode.
 //
 // Two modes exist today:
 //   - 'live' : the real backend (Flask + Neo4j + actual pipeline).

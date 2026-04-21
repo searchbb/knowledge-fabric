@@ -1,6 +1,6 @@
 <div align="center">
 
-# Knowledge Fabric
+# Knowledge Fabric Center
 
 **A Knowledge Workspace for Research and Insight**
 
@@ -14,7 +14,7 @@
 
 ## Overview
 
-Knowledge Fabric imports articles or Markdown documents, builds a knowledge graph for each project, and lets you browse that knowledge in a workspace.
+Knowledge Fabric Center imports articles or Markdown documents, builds a knowledge graph for each project, and lets you browse that knowledge in a workspace.
 
 You can:
 
@@ -25,7 +25,7 @@ You can:
 
 ### System overview
 
-![Knowledge Fabric System Overview](./docs/images/knowledge-fabric-overview.png)
+![Knowledge Fabric Center System Overview](./docs/images/knowledge-fabric-overview.png)
 
 The architecture unfolds across four core stages: extracting structure from text, organizing that structure into a reading skeleton, linking skeletons across articles, and growing a persistent knowledge network.
 
@@ -34,7 +34,7 @@ The architecture unfolds across four core stages: extracting structure from text
 - **Reading skeleton** — the article's core thread is surfaced, highlighting key nodes such as problems, solutions, and architecture, making content easier to navigate.
 - **Knowledge network** — concepts, arguments, methods, and evidence across articles are linked together, accumulating into a traceable, extensible long-term knowledge asset.
 
-> Knowledge Fabric is not about how much you store — it's about whether content can be woven into structure, structure distilled into a network, and that network turned into understanding.
+> Knowledge Fabric Center is not about how much you store — it's about whether content can be woven into structure, structure distilled into a network, and that network turned into understanding.
 
 ## Architecture & pipeline
 
@@ -220,7 +220,7 @@ Discover V2 keeps four independent JSON sidecars (all under `backend/data/`):
 
 ## Current release
 
-This repository is a **Preview** of Knowledge Fabric. Article ingestion, graph building, the project workspace, and global concept / theme browsing are usable today; some review and evolution views are still prototypes.
+This repository is a **Preview** of Knowledge Fabric Center. Article ingestion, graph building, the project workspace, and global concept / theme browsing are usable today; some review and evolution views are still prototypes.
 
 ## Quick start
 
