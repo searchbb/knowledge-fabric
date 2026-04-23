@@ -841,6 +841,13 @@ def build_graph():
                     )
                     try:
                         extractor = ReadingStructureExtractor()
+                        # Prefer the resolved domain from ontology_metadata (what
+                        # the classifier chose), fallback to project.domain, then
+                        # 'tech' for legacy safety.
+                        metadata = project.ontology_metadata or {}
+                        reading_domain = metadata.get("resolved_domain") or project.domain or "tech"
+                        if reading_domain == "auto":
+                            reading_domain = "tech"
                         with stage("reading_structure"):
                             reading_structure = extractor.extract(
                                 project_name=project.name or graph_name,
@@ -849,6 +856,7 @@ def build_graph():
                                 ontology=ontology,
                                 graph_data=graph_data,
                                 simulation_requirement=project.simulation_requirement or "",
+                                domain=reading_domain,
                             )
                         project.reading_structure = reading_structure
                         reading_structure_status = _normalize_phase1_reading_structure_status(

@@ -29,7 +29,80 @@ DEFAULT_GROUP_TITLES = {
     "Insight": "核心洞察",
     "Example": "案例证据",
 }
-READING_STRUCTURE_SYSTEM_PROMPT = """你是一个技术文章编辑，专门把知识图谱整理成适合人类阅读的文章骨架。
+
+# Domain-aware reading-view configs (v3 methodology secondary-path fix).
+# Per-domain backbone labels + group_titles. The tech variant preserves
+# the original hardcoded values; methodology gets its own.
+
+GROUP_TITLES_BY_DOMAIN: dict[str, dict[str, str]] = {
+    "tech": {
+        "Layer": "架构层级",
+        "Mechanism": "关键机制",
+        "Decision": "关键决策",
+        "Technology": "涉及技术",
+        "Metric": "验证指标",
+        "Evidence": "关键证据",
+        "Insight": "核心洞察",
+        "Example": "案例证据",
+    },
+    "methodology": {
+        "Step": "步骤流程",
+        "Antipattern": "反模式",
+        "Case": "案例与证据",
+        "Signal": "识别信号",
+    },
+}
+
+BACKBONE_LABELS_BY_DOMAIN: dict[str, list[str]] = {
+    "tech": ["Topic", "Problem", "Solution", "Architecture"],
+    "methodology": ["Topic", "Problem", "Principle", "Method"],
+}
+
+
+def _build_system_prompt(domain: str) -> str:
+    if domain == "methodology":
+        return """你是一个方法论文章编辑，专门把知识图谱整理成适合人类阅读的文章骨架。
+
+你的任务不是重做实体关系抽取，而是：
+1. 阅读文章内容摘要和图谱候选节点
+2. 提炼出最适合阅读视图展示的主线标题
+3. 用简洁中文给出核心问题、核心方法、核心原则/框架的摘要标题
+4. 给阅读视图中的分组节点补充更自然的标题
+5. 提取文章的原始章节结构
+
+约束：
+- 输出必须是严格 JSON
+- 只能输出指定字段，不要增加额外字段
+- 不要编造原文没有的事实
+- 标题要像人类写的目录节点，不要像数据库实体名
+- 每个 title 尽量 6-18 个中文字符
+- summary 尽量 1 句话，不超过 70 个中文字符
+- problem / solution / architecture 语义在方法论文中：
+  - problem = 文章要回答的核心问题或研究问题
+  - solution = 文章主张的核心方法 / 主要框架（Method 类节点）
+  - architecture = 文章的方法论路径或论证结构（如"问题→原则→方法→案例"）
+- problem / solution / architecture 下面只能保留 title 和 summary 两个字段
+- group_titles 中只保留图谱中实际存在的类型对应的键（从以下选择：Step / Antipattern / Case / Signal）
+- article_sections 必须从原文标题/段落结构中提取，不要自己编造章节
+
+输出格式：
+{
+  "title": "整篇文章的阅读标题",
+  "summary": "一句话概括文章主线",
+  "problem": {"title": "核心问题标题", "summary": "一句话说明"},
+  "solution": {"title": "核心方法标题", "summary": "一句话说明"},
+  "architecture": {"title": "论证结构标题", "summary": "一句话说明"},
+  "group_titles": {
+    "Step": "步骤流程",
+    "Antipattern": "反模式",
+    "Case": "案例与证据",
+    "Signal": "识别信号"
+  },
+  "article_sections": ["原文第一个章节标题", "原文第二个章节标题", "..."]
+}
+"""
+    # default: tech — preserve original prompt verbatim
+    return """你是一个技术文章编辑，专门把知识图谱整理成适合人类阅读的文章骨架。
 
 你的任务不是重做实体关系抽取，而是：
 1. 阅读文章内容摘要和图谱候选节点
@@ -89,6 +162,7 @@ class ReadingStructureExtractor:
         ontology: Optional[Dict[str, Any]],
         graph_data: Optional[Dict[str, Any]],
         simulation_requirement: str = "",
+        domain: str = "tech",
     ) -> Dict[str, Any]:
         """抽取阅读骨架。LLM 失败时直接抛出异常。"""
         prompt = self._build_user_prompt(
@@ -98,11 +172,12 @@ class ReadingStructureExtractor:
             ontology=ontology or {},
             graph_data=graph_data or {},
             simulation_requirement=simulation_requirement,
+            domain=domain,
         )
 
         raw = self.llm_client.chat_json(
             [
-                {"role": "system", "content": READING_STRUCTURE_SYSTEM_PROMPT},
+                {"role": "system", "content": _build_system_prompt(domain)},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
@@ -129,8 +204,9 @@ class ReadingStructureExtractor:
         ontology: Dict[str, Any],
         graph_data: Dict[str, Any],
         simulation_requirement: str,
+        domain: str = "tech",
     ) -> str:
-        graph_digest = self._build_graph_digest(graph_data)
+        graph_digest = self._build_graph_digest(graph_data, domain=domain)
         entity_types = [item.get("name") for item in ontology.get("entity_types", []) if item.get("name")]
         edge_types = [item.get("name") for item in ontology.get("edge_types", []) if item.get("name")]
         truncated_text = (document_text or "").strip()
@@ -161,7 +237,7 @@ class ReadingStructureExtractor:
 {truncated_text}
 """
 
-    def _build_graph_digest(self, graph_data: Dict[str, Any]) -> str:
+    def _build_graph_digest(self, graph_data: Dict[str, Any], domain: str = "tech") -> str:
         nodes = graph_data.get("nodes", []) or []
         edges = graph_data.get("edges", []) or []
         degree_map = Counter()
@@ -210,7 +286,7 @@ class ReadingStructureExtractor:
             f"edge_count={graph_data.get('edge_count', len(edges))}",
         ]
 
-        backbone_labels = ["Topic", "Problem", "Solution", "Architecture"]
+        backbone_labels = BACKBONE_LABELS_BY_DOMAIN.get(domain, BACKBONE_LABELS_BY_DOMAIN["tech"])
         backbone_count = 0
         for label in backbone_labels:
             items = grouped_nodes.get(label) or []
