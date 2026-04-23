@@ -31,7 +31,7 @@ logger = logging.getLogger("mirofish.auto_theme_proposer")
 
 # Bumped whenever proposer decision logic changes (GPT C9 audit — lets a bad
 # decision get attributed back to a specific proposer iteration).
-PROPOSER_VERSION = "v3.null_first_2026-04-23"
+PROPOSER_VERSION = "v3.effective_orphans_2026-04-23"
 
 
 @dataclass
@@ -365,35 +365,66 @@ class AutoThemeProposer:
             else:
                 orphans.append({"entry_id": entry_id, "confidence": confidence, "reason": reason})
 
-        # New theme candidate?
-        new_candidate = None
-        orphan_ratio = len(orphans) / max(len(assignments_raw), 1)
-        core_orphans = [o for o in orphans if self._is_core_concept_type(o["entry_id"], concepts)]
+        # Decision metric refinement (v3 OOD fix, 2026-04-23):
+        # The old orphan_ratio treated candidate-role attachments as
+        # "classified," so all-candidate OOD runs produced ratio=0 and
+        # never reached the 0.6 new-theme gate. Redefine: when zero
+        # member-role attachments land, count the candidate-role rows
+        # as effective orphans for the gate (the attaches themselves
+        # still stand — we keep the weak signal, we just don't let it
+        # hide the OOD).
+        member_count = sum(1 for r in result_assignments if r["role"] == "member")
+        candidate_rows = [r for r in result_assignments if r["role"] == "candidate"]
+        candidate_count = len(candidate_rows)
 
+        if member_count == 0:
+            effective_orphans = orphans + [
+                {"entry_id": r["entry_id"], "confidence": r["confidence"],
+                 "reason": "unmembered_candidate_" + (r.get("reason") or "")}
+                for r in candidate_rows
+            ]
+        else:
+            effective_orphans = orphans
+
+        effective_orphan_count = len(effective_orphans)
+        orphan_ratio = effective_orphan_count / max(len(assignments_raw), 1)
+        core_orphans = [
+            o for o in effective_orphans
+            if self._is_core_concept_type(o["entry_id"], concepts)
+        ]
+
+        new_candidate = None
         if (
             orphan_ratio >= self.orphan_ratio_for_new_theme
             and len(core_orphans) >= self.min_core_orphans_for_new_theme
         ):
             new_candidate = self._propose_new_theme_candidate(
-                orphans, concepts, run_id, article_title
+                effective_orphans, concepts, run_id, article_title
             )
 
         action = "classified"
         if new_candidate:
             action = "classified_with_new_candidate"
 
-        # Set legacy compat fields
         first_theme = result_assignments[0] if result_assignments else None
 
         return AutoThemeResult(
             action=action,
             assignments=result_assignments,
             new_candidate_theme=new_candidate,
-            orphan_count=len(orphans),
-            reason=f"{len(result_assignments)} assigned, {len(orphans)} orphans",
+            orphan_count=len(orphans),  # real orphans (backward-compat)
+            reason=f"{len(result_assignments)} assigned, {len(orphans)} orphans, "
+                   f"{effective_orphan_count} effective",
             theme_id=new_candidate["theme_id"] if new_candidate else (first_theme["theme_id"] if first_theme else None),
             theme_name=new_candidate["name"] if new_candidate else None,
             attached_concept_ids=all_attached_ids,
+            audit={
+                "member_count": member_count,
+                "candidate_count": candidate_count,
+                "effective_orphan_count": effective_orphan_count,
+                "orphan_ratio": orphan_ratio,
+                "core_orphan_count": len(core_orphans),
+            },
         )
 
     def _is_core_concept_type(self, entry_id: str, concepts: list[dict]) -> bool:
