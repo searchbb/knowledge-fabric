@@ -47,7 +47,7 @@ def _load_events() -> list[dict]:
 
 
 def _create_theme() -> str:
-    theme = themes.create_theme(name="Test Theme", description="")
+    theme = themes.create_theme(name="Test Theme", description="", domain="tech")
     return theme["theme_id"]
 
 

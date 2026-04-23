@@ -124,15 +124,19 @@ def create_global_theme():
     if not name:
         return jsonify({"success": False, "error": "name 不能为空"}), 400
 
+    domain = body.get("domain") or None
     try:
         theme = create_theme(
             name=name,
             description=str(body.get("description") or ""),
             keywords=body.get("keywords") if isinstance(body.get("keywords"), list) else None,
+            domain=domain,
         )
         return jsonify({"success": True, "data": theme}), 201
     except GlobalThemeDuplicateError as exc:
         return jsonify({"success": False, "error": str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
 
 @registry_bp.route("/themes/<theme_id>", methods=["PUT"])

@@ -198,7 +198,7 @@ class TestThemeRegistryEmitsEvents:
     def test_create_theme_emits_event(self, evo_client):
         resp = evo_client.post(
             "/api/registry/themes",
-            json={"name": "AI Ethics"},
+            json={"name": "AI Ethics", "domain": "tech"},
         )
         assert resp.status_code == 201
         theme_id = resp.get_json()["data"]["theme_id"]
@@ -209,7 +209,7 @@ class TestThemeRegistryEmitsEvents:
         assert data["events"][0]["event_type"] == "created"
 
     def test_link_cluster_emits_event(self, evo_client):
-        resp = evo_client.post("/api/registry/themes", json={"name": "Safety Theme"})
+        resp = evo_client.post("/api/registry/themes", json={"name": "Safety Theme", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         evo_client.post(

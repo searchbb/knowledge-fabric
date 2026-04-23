@@ -31,7 +31,7 @@ def test_system_prompt_contains_null_first_instruction():
          "description": "", "keywords": [], "concept_memberships": []},
     ]
 
-    with patch("app.utils.llm_client.LLMClient", return_value=FakeLLM()), \
+    with patch("app.services.auto.theme_proposer.LLMClient", return_value=FakeLLM()), \
          patch("app.services.auto.theme_proposer.registry.list_entries", return_value=[]):
         proposer._classify_via_llm(concepts, themes, "Some article")
 
@@ -73,7 +73,7 @@ def test_system_prompt_does_not_contain_unconditional_reuse_pressure():
             captured_messages.append(messages)
             return {"assignments": []}
 
-    with patch("app.utils.llm_client.LLMClient", return_value=FakeLLM()), \
+    with patch("app.services.auto.theme_proposer.LLMClient", return_value=FakeLLM()), \
          patch("app.services.auto.theme_proposer.registry.list_entries", return_value=[]):
         proposer._classify_via_llm(
             [{"entry_id": "e1", "canonical_name": "n", "concept_type": "Topic"}],

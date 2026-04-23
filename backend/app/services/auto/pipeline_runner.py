@@ -813,13 +813,64 @@ class AutoPipelineRunner:
         new_canonical_ids: list[str],
         run_id: str,
     ) -> AutoThemeResult:
+        # Resolve the project's effective domain. Priority:
+        # 1. ontology_metadata.resolved_domain (what the classifier decided)
+        # 2. project.domain (what the user selected)
+        # 3. 'tech' fallback (legacy projects / auto-without-text)
+        effective_domain = self._resolve_project_domain(project_id)
         return self.theme_proposer.process(
             project_id=project_id,
             project_name=project_name,
             article_title=article_title,
             new_canonical_ids=new_canonical_ids,
             run_id=run_id,
+            project_domain=effective_domain,
         )
+
+    def _resolve_project_domain(self, project_id: str) -> str:
+        """Resolve the project's effective domain for theme scoping.
+
+        Priority chain:
+        1. project.ontology_metadata.resolved_domain (classifier decision)
+        2. project.domain (user selection or classifier-result-that-wasn't-stored)
+        3. 'tech' fallback (legacy projects / missing)
+
+        'auto' at either level is coerced to 'tech' — should not occur after
+        Stage 2 wiring because /ontology/generate resolves before persisting,
+        but guard against it.
+        """
+        from ...models.project import ProjectManager
+
+        try:
+            project = ProjectManager.get_project(
+                project_id, include_legacy_phase1_backfill=False,
+            )
+        except Exception as e:
+            logger.warning(
+                "_resolve_project_domain: could not load project %s — falling back to 'tech': %s",
+                project_id, e,
+            )
+            return "tech"
+
+        if project is None:
+            logger.warning(
+                "_resolve_project_domain: project %s not found — falling back to 'tech'",
+                project_id,
+            )
+            return "tech"
+
+        metadata = project.ontology_metadata or {}
+        effective = metadata.get("resolved_domain") or project.domain or "tech"
+
+        if effective == "auto":
+            logger.warning(
+                "_resolve_project_domain: project %s still has 'auto' domain "
+                "(classifier didn't run or didn't persist) — falling back to 'tech'",
+                project_id,
+            )
+            return "tech"
+
+        return effective
 
     def _schedule_discover_job(
         self,
