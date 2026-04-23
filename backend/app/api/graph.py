@@ -291,23 +291,53 @@ def generate_ontology():
         
         # 生成本体
         logger.info("调用 LLM 生成本体定义...")
-        generator = OntologyGenerator()
-        ontology = generator.generate(
-            document_texts=document_texts,
-            simulation_requirement=simulation_requirement,
-            additional_context=additional_context if additional_context else None
+        from ..services.extraction.ontology_dispatcher import (
+            get_ontology_generator, resolve_project_domain,
         )
-        
+
+        # Resolve 'auto' to a concrete domain. Use the first document text
+        # as the classifier input when available.
+        article_text_for_classifier = (
+            document_texts[0] if document_texts else ""
+        )
+        resolved_domain = resolve_project_domain(
+            project.to_dict(),
+            article_text=article_text_for_classifier or None,
+        )
+        generator = get_ontology_generator(resolved_domain)
+
+        # Interface compatibility: tech OntologyGenerator has
+        # simulation_requirement as required positional; methodology has
+        # it as optional kwarg. Call with explicit kwargs either way.
+        if resolved_domain == "tech":
+            ontology = generator.generate(
+                document_texts,
+                simulation_requirement,
+                additional_context if additional_context else None,
+            )
+        else:
+            ontology = generator.generate(
+                document_texts=document_texts,
+                simulation_requirement=simulation_requirement,
+                additional_context=additional_context if additional_context else None,
+            )
+
+        # Record the resolved domain on the project so downstream stages know.
+        project.domain = resolved_domain
+
         # 保存本体到项目
         entity_count = len(ontology.get("entity_types", []))
         edge_count = len(ontology.get("edge_types", []))
         logger.info(f"本体生成完成: {entity_count} 个实体类型, {edge_count} 个关系类型")
-        
+
         project.ontology = {
             "entity_types": ontology.get("entity_types", []),
             "edge_types": ontology.get("edge_types", [])
         }
         project.ontology_metadata = ontology.get("metadata", {})
+        if project.ontology_metadata is None:
+            project.ontology_metadata = {}
+        project.ontology_metadata["resolved_domain"] = resolved_domain
         project.analysis_summary = ontology.get("analysis_summary", "")
         project.status = ProjectStatus.ONTOLOGY_GENERATED
         ProjectManager.save_project(project)
