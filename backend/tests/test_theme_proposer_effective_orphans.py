@@ -130,3 +130,107 @@ def test_mixed_run_with_some_members_uses_real_orphan_count():
     assert result.audit["effective_orphan_count"] == 2
     assert not propose_calls, "new-theme should NOT be triggered when members exist"
     assert result.action == "classified"
+
+
+def test_all_candidate_run_below_core_orphan_threshold_does_not_trigger():
+    """member_count == 0 and effective orphans all candidates, but fewer
+    than min_core_orphans_for_new_theme (default 3) core-type concepts:
+    gate must NOT fire. Guards against tiny-article false positives."""
+    proposer = AutoThemeProposer()  # min_core_orphans_for_new_theme = 3
+
+    # Only 2 core concepts, both attached as candidates. Effective orphans = 2.
+    # orphan_ratio = 2/2 = 1.0 (passes ratio gate), but core_orphan_count = 2 (< 3)
+    concepts_payload = [
+        {"entry_id": "e0", "canonical_name": "c0", "concept_type": "Problem"},
+        {"entry_id": "e1", "canonical_name": "c1", "concept_type": "Solution"},
+    ]
+    fake_entries = [
+        {"entry_id": c["entry_id"], "canonical_name": c["canonical_name"],
+         "concept_type": c["concept_type"]} for c in concepts_payload
+    ]
+    existing_theme = _fake_theme("t_existing", "Existing")
+    llm_assignments = [
+        {"entry_id": "e0", "attach_to_theme_id": "t_existing",
+         "confidence": 0.65, "reason": "weak"},
+        {"entry_id": "e1", "attach_to_theme_id": "t_existing",
+         "confidence": 0.7, "reason": "weak"},
+    ]
+
+    propose_calls: list = []
+    with patch(
+        "app.services.auto.theme_proposer.themes.list_themes",
+        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+    ), patch(
+        "app.services.auto.theme_proposer.registry.list_entries",
+        return_value=fake_entries,
+    ), patch.object(
+        AutoThemeProposer, "_classify_via_llm",
+        return_value={"assignments": llm_assignments},
+    ), patch(
+        "app.services.auto.theme_proposer.themes.attach_concepts", return_value=None,
+    ), patch.object(
+        AutoThemeProposer, "_propose_new_theme_candidate",
+        side_effect=lambda *a, **kw: propose_calls.append(1) or None,
+    ):
+        result = proposer.process(
+            project_id="p",
+            new_canonical_ids=[c["entry_id"] for c in concepts_payload],
+            run_id="r",
+        )
+
+    assert result.audit["member_count"] == 0
+    assert result.audit["effective_orphan_count"] == 2
+    assert result.audit["core_orphan_count"] == 2
+    # Ratio gate passes (1.0 >= 0.6), core gate fails (2 < 3), so no new theme
+    assert not propose_calls, "core_orphan_count < 3 must block new-theme"
+    assert result.action == "classified"
+
+
+def test_empty_llm_assignments_produces_classified_with_zero_counts():
+    """LLM returns {'assignments': []}: degenerate case, no attaches, no
+    orphans, no new-theme proposal. Audit must still be populated with zeros
+    (not KeyError). The max(len(assignments_raw), 1) guard must prevent
+    zero-division in orphan_ratio."""
+    proposer = AutoThemeProposer()
+
+    concepts_payload = [
+        {"entry_id": "e0", "canonical_name": "c0", "concept_type": "Problem"},
+        {"entry_id": "e1", "canonical_name": "c1", "concept_type": "Solution"},
+        {"entry_id": "e2", "canonical_name": "c2", "concept_type": "Topic"},
+    ]
+    fake_entries = [
+        {"entry_id": c["entry_id"], "canonical_name": c["canonical_name"],
+         "concept_type": c["concept_type"]} for c in concepts_payload
+    ]
+    existing_theme = _fake_theme("t_existing", "Existing")
+
+    propose_calls: list = []
+    with patch(
+        "app.services.auto.theme_proposer.themes.list_themes",
+        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+    ), patch(
+        "app.services.auto.theme_proposer.registry.list_entries",
+        return_value=fake_entries,
+    ), patch.object(
+        AutoThemeProposer, "_classify_via_llm",
+        return_value={"assignments": []},  # empty
+    ), patch(
+        "app.services.auto.theme_proposer.themes.attach_concepts", return_value=None,
+    ), patch.object(
+        AutoThemeProposer, "_propose_new_theme_candidate",
+        side_effect=lambda *a, **kw: propose_calls.append(1) or None,
+    ):
+        result = proposer.process(
+            project_id="p",
+            new_canonical_ids=[c["entry_id"] for c in concepts_payload],
+            run_id="r",
+        )
+
+    # Graceful degradation: all zero counts, no crashes
+    assert result.audit["member_count"] == 0
+    assert result.audit["candidate_count"] == 0
+    assert result.audit["effective_orphan_count"] == 0
+    assert result.audit["orphan_ratio"] == 0.0
+    assert result.audit["core_orphan_count"] == 0
+    assert not propose_calls
+    assert result.action == "classified"

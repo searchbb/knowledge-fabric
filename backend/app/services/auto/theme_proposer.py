@@ -373,6 +373,17 @@ class AutoThemeProposer:
         # as effective orphans for the gate (the attaches themselves
         # still stand — we keep the weak signal, we just don't let it
         # hide the OOD).
+        # Dual-membership note (v3 effective_orphans):
+        # When member_count == 0, the candidate-role rows below will end up
+        # attached both to their original existing-theme (role="candidate",
+        # already written via attach_concepts in the loop above) AND to the
+        # newly-proposed theme via _propose_new_theme_candidate (role="member").
+        # This is intentional — the weak existing-theme link is kept as an
+        # audit trail of what the LLM considered; the new theme is the
+        # concept's actual home. Task 3's article-level OOD pre-gate provides
+        # the cleaner path (no existing-theme attach at all) for whole-article
+        # OOD cases. Here we're handling partial OOD after attach has already
+        # committed.
         member_count = sum(1 for r in result_assignments if r["role"] == "member")
         candidate_rows = [r for r in result_assignments if r["role"] == "candidate"]
         candidate_count = len(candidate_rows)
