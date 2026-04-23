@@ -363,7 +363,11 @@ const props = defineProps({
   fromSource: {
     type: String,
     default: ''
-  }
+  },
+  domain: {
+    type: String,
+    default: 'tech',  // tech-safe default
+  },
 })
 
 const emit = defineEmits(['refresh', 'toggle-maximize', 'view-change'])
@@ -398,6 +402,16 @@ const TYPE_LABEL_MAP = {
   Evidence: '证据',
   Insight: '洞察',
   Example: '案例',
+  // methodology types (v3 domain-scoped ontology)
+  Principle: '原则',
+  Method: '方法',
+  Step: '步骤',
+  Antipattern: '反模式',
+  Case: '案例',
+  Signal: '信号',
+  // Synthetic type for methodology's third reading backbone section
+  // (replaces 'Architecture' chip when domain=methodology)
+  ReasoningPath: '论证路径',
   Entity: '实体',
   Unclassified: '未归类'
 }
@@ -432,6 +446,13 @@ const KNOWN_TYPE_COLORS = {
   Evidence: '#D4A843',
   Insight: '#2E86AB',
   Example: '#2FA84F',
+  // methodology colors (v3)
+  Principle: '#6A994E',    // green — stable upper principle
+  Method: '#BC4749',       // red — actionable method
+  Step: '#386641',         // darker green — step progression
+  Antipattern: '#D88C26',  // amber/warning — avoid
+  Signal: '#6D98BA',       // blue-grey — observational
+  ReasoningPath: '#B56B45', // same warm brown as Architecture (similar function)
   Unclassified: '#A0A7B4',
 }
 
@@ -1397,7 +1418,7 @@ const buildReadingTreeData = (graphData, readingStructure = null) => {
     const architectureSummaryNode = createReadingSummaryNode(
       `reading-architecture-${rootNode.id}`,
       readingStructure.architecture.title,
-      'Architecture',
+      props.domain === 'methodology' ? 'ReasoningPath' : 'Architecture',
       readingStructure.architecture.summary,
       {
         representative_node: primaryArchitecture?.name || primarySolution?.name || rootNode.name,
@@ -2313,7 +2334,8 @@ const renderReadingGraph = () => {
 
   const getTypeBadgeWidth = (node) => {
     const label = TYPE_LABEL_MAP[node.data.type] || node.data.type
-    return Math.max(38, Math.min(54, label.length * 10 + 12))
+    // Chinese chars are wider than ASCII; allow up to 72px to fit "论证路径" / "反模式"
+    return Math.max(38, Math.min(72, label.length * 12 + 12))
   }
 
   const getTypeBadgeOffsetX = (node) => {
@@ -2377,7 +2399,8 @@ const renderReadingGraph = () => {
     .style('font-family', 'JetBrains Mono, monospace')
     .text(node => {
       const label = TYPE_LABEL_MAP[node.data.type] || node.data.type
-      return label.length > 5 ? `${label.slice(0, 5)}` : label
+      // Allow up to 4 chars to fit "论证路径" without truncation; English fallbacks stay readable
+      return label.length > 4 ? `${label.slice(0, 4)}` : label
     })
 
   const groupToggles = nodeCards

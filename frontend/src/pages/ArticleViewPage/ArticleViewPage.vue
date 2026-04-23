@@ -82,6 +82,7 @@
           :schemaRelationTypes="project?.ontology?.edge_types || []"
           :focusNodeKey="focusNodeKey"
           :fromSource="fromSource"
+          :domain="project?.domain || 'tech'"
           @refresh="$emit('refresh')"
           @view-change="handleViewChange"
         />
