@@ -211,6 +211,9 @@ def generate_ontology():
         # vault_relative_dir: 用户选择的 Obsidian vault 子目录(相对 vault 根)。
         # 空字符串表示不走 vault,沿用 backend/uploads(向后兼容,供未配置 vault 的环境使用)。
         vault_relative_dir = (request.form.get('vault_relative_dir') or '').strip() or None
+        domain = request.form.get('domain', 'auto')
+        if domain not in {"tech", "methodology", "auto"}:
+            return jsonify({"error": f"invalid domain {domain!r}"}), 400
 
         logger.debug(f"项目名称: {project_name}")
         logger.debug(f"模拟需求: {simulation_requirement[:100]}...")
@@ -232,7 +235,7 @@ def generate_ontology():
             }), 400
 
         # 创建项目
-        project = ProjectManager.create_project(name=project_name)
+        project = ProjectManager.create_project(name=project_name, domain=domain)
         project.simulation_requirement = simulation_requirement
         logger.info(f"创建项目: {project.project_id}")
 
