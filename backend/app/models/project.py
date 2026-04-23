@@ -53,7 +53,13 @@ class Project:
     simulation_requirement: Optional[str] = None
     chunk_size: int = Config.DEFAULT_CHUNK_SIZE
     chunk_overlap: int = Config.DEFAULT_CHUNK_OVERLAP
-    
+
+    # Domain routing (v3 domain-scoped ontology): which ontology template to use.
+    # Values: "tech" | "methodology" | "auto". Default "auto" for new projects.
+    # Legacy projects without this field are runtime-treated as "tech" in
+    # from_dict() — we DO NOT backfill the JSON so existing data stays frozen.
+    domain: str = "auto"
+
     # Phase 2 人工决策（校验状态）
     review_decisions: Optional[Dict[str, Any]] = None
     concept_decisions: Optional[Dict[str, Any]] = None
@@ -87,7 +93,8 @@ class Project:
             "concept_decisions": self.concept_decisions,
             "theme_decisions": self.theme_decisions,
             "theme_clusters": self.theme_clusters,
-            "error": self.error
+            "error": self.error,
+            "domain": self.domain,
         }
     
     @classmethod
@@ -119,7 +126,10 @@ class Project:
             concept_decisions=data.get('concept_decisions'),
             theme_decisions=data.get('theme_decisions'),
             theme_clusters=data.get('theme_clusters'),
-            error=data.get('error')
+            error=data.get('error'),
+            # Legacy projects without 'domain' default to 'tech' at runtime.
+            # New projects always have 'domain' explicitly set.
+            domain=data.get('domain', 'tech'),
         )
 
 
@@ -128,7 +138,16 @@ class ProjectManager:
     
     # 项目存储根目录
     PROJECTS_DIR = os.path.join(Config.UPLOAD_FOLDER, 'projects')
-    
+
+    VALID_DOMAINS = {"tech", "methodology", "auto"}
+
+    @classmethod
+    def _validate_domain(cls, domain: str) -> None:
+        if domain not in cls.VALID_DOMAINS:
+            raise ValueError(
+                f"invalid domain {domain!r} — must be one of {sorted(cls.VALID_DOMAINS)}"
+            )
+
     @classmethod
     def _ensure_projects_dir(cls):
         """确保项目目录存在"""
@@ -155,27 +174,30 @@ class ProjectManager:
         return os.path.join(cls._get_project_dir(project_id), 'extracted_text.txt')
     
     @classmethod
-    def create_project(cls, name: str = "Unnamed Project") -> Project:
+    def create_project(cls, name: str = "Unnamed Project", *, domain: str = "auto") -> Project:
         """
         创建新项目
-        
+
         Args:
             name: 项目名称
-            
+            domain: 领域路由 ("tech" | "methodology" | "auto")
+
         Returns:
             新创建的Project对象
         """
         cls._ensure_projects_dir()
-        
+        cls._validate_domain(domain)
+
         project_id = f"proj_{uuid.uuid4().hex[:12]}"
         now = datetime.now().isoformat()
-        
+
         project = Project(
             project_id=project_id,
             name=name,
             status=ProjectStatus.CREATED,
             created_at=now,
-            updated_at=now
+            updated_at=now,
+            domain=domain,
         )
         
         # 创建项目目录结构
