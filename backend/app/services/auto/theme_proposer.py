@@ -31,7 +31,7 @@ logger = logging.getLogger("mirofish.auto_theme_proposer")
 
 # Bumped whenever proposer decision logic changes (GPT C9 audit — lets a bad
 # decision get attributed back to a specific proposer iteration).
-PROPOSER_VERSION = "v2.candidate_visible_2026-04-16"
+PROPOSER_VERSION = "v3.null_first_2026-04-23"
 
 
 @dataclass
@@ -234,14 +234,22 @@ class AutoThemeProposer:
 
         system_prompt = (
             "你是知识治理系统中的主题归属判定器。\n"
-            "你的任务不是为每篇文章发明新主题，而是把 canonical 概念归入少量稳定的全局主题。\n"
-            "优先复用已有主题，谨慎提议新主题。\n"
-            "主题列表中每个主题都带有 status 字段：\n"
-            "  - status=active 表示该主题已稳定运行，跨多文章存在；优先归到这里。\n"
-            "  - status=candidate 表示该主题仍在观察期（单文章/新建）；可以归入，\n"
-            "    但证据需要略强（如多个概念和该主题高度相关），否则说明是另一个主题域。\n"
+            "你的任务是判断每个 canonical 概念是否真的属于某个已有全局主题。\n"
+            "\n"
+            "关键纪律（null-first）：\n"
+            "  - 如果一个概念与所有已有主题的真实相关度都低于 0.6，\n"
+            "    必须返回 attach_to_theme_id=null，不要硬凑。\n"
+            "  - 勉强匹配（关键词撞车、表面相似）比留空更糟：\n"
+            "    它会污染主题，也会阻止系统识别这是一篇需要新主题的文章。\n"
+            "  - 宁可多个 null，也不要 0.6-0.75 的\"差不多\"归属。\n"
+            "\n"
+            "主题列表中每个主题带有 status：\n"
+            "  - active：稳定运行、跨多文章存在。若真的相关，优先归到这里。\n"
+            "  - candidate：观察期（单文章/新建）。可以归入，但证据需要更强。\n"
+            "\n"
             "主题应该是可跨文章持续累积的问题域、方法域或工作域。\n"
-            "工具名/产品名/单篇文章标题通常不是主题。\n"
+            "工具名、产品名、单篇文章标题通常不是主题。\n"
+            "\n"
             "严格返回 JSON，不要输出 markdown。"
         )
 
@@ -254,9 +262,12 @@ class AutoThemeProposer:
 
         user_prompt += (
             "对每个 concept 判断：\n"
-            '- attach_to_theme_id: 归属的已有主题ID，或 null（表示无法归入）\n'
-            '- confidence: 0~1 的置信度\n'
-            '- reason: 一句话理由\n\n'
+            "- attach_to_theme_id: 归属主题ID；如果没有真正合适的主题，请返回 null。\n"
+            "- confidence: 0~1 的置信度。\n"
+            "  * >= 0.78 表示这个概念确实属于该主题的核心范畴。\n"
+            "  * 0.55-0.78 表示相关但不核心；只在确实相关时使用，禁止用于凑数。\n"
+            "  * < 0.55 请直接返回 attach_to_theme_id=null。\n"
+            "- reason: 一句话理由。\n\n"
             "严格返回 JSON，格式：\n"
             '{"assignments": [{"entry_id": "...", "attach_to_theme_id": "..." | null, '
             '"confidence": 0.85, "reason": "..."}]}'
