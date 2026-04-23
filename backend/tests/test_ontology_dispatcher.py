@@ -60,7 +60,6 @@ def test_resolve_domain_missing_field_treats_as_tech():
     assert resolved == "tech"
 
 
-@pytest.mark.xfail(reason="DomainClassifier not implemented until Stage 4")
 def test_resolve_domain_auto_with_text_invokes_classifier():
     """When text is provided, 'auto' delegates to DomainClassifier."""
     with patch(

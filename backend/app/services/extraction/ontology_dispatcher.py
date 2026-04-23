@@ -10,6 +10,7 @@ from typing import Optional
 
 from ..ontology_generator import OntologyGenerator
 from ..methodology_ontology_generator import MethodologyOntologyGenerator
+from ..domain_classifier import DomainClassifier
 
 
 # Fallback threshold for auto-classified domains. If the classifier's
@@ -58,7 +59,6 @@ def resolve_project_domain(
     if domain == "auto":
         if article_text is None:
             return "tech"
-        from ..domain_classifier import DomainClassifier
         result = DomainClassifier().classify(title="", text=article_text)
         confidence = float(result.get("confidence", 0) or 0)
         primary = result.get("primary", "tech")
