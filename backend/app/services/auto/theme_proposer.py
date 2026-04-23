@@ -81,6 +81,8 @@ class AutoThemeProposer:
         min_concepts_for_action: int = 2,
         orphan_ratio_for_new_theme: float = 0.6,
         min_core_orphans_for_new_theme: int = 3,
+        ood_max_confidence_cutoff: float = 0.75,
+        ood_min_core_concepts: int = 3,
         actor_id: str = "auto_pipeline",
         source: str = "auto_url_pipeline",
     ):
@@ -89,6 +91,8 @@ class AutoThemeProposer:
         self.min_concepts_for_action = min_concepts_for_action
         self.orphan_ratio_for_new_theme = orphan_ratio_for_new_theme
         self.min_core_orphans_for_new_theme = min_core_orphans_for_new_theme
+        self.ood_max_confidence_cutoff = ood_max_confidence_cutoff
+        self.ood_min_core_concepts = ood_min_core_concepts
         self.actor_id = actor_id
         self.source = source
 
@@ -342,14 +346,12 @@ class AutoThemeProposer:
             })
         return {"assignments": assignments} if assignments else None
 
-    # Article-level OOD detection constants (v3 OOD fix):
-    # - min_max_confidence_for_in_domain: if max assignment confidence is
-    #   below this, the article's best guess is too weak to trust.
-    # - min_core_concepts_for_ood: minimum core-type concepts required
-    #   before the gate is allowed to fire (guards against tiny-article
-    #   false positives).
-    OOD_MAX_CONFIDENCE_CUTOFF = 0.75
-    OOD_MIN_CORE_CONCEPTS = 3
+    # Article-level OOD detection (v3 OOD fix, configured via __init__):
+    # - ood_max_confidence_cutoff: if max assignment confidence is below
+    #   this, the article's best guess is too weak to trust.
+    # - ood_min_core_concepts: minimum core-type concepts required before
+    #   the gate is allowed to fire (guards against tiny-article false
+    #   positives).
 
     def _check_article_level_ood(
         self, llm_result: dict, concepts: list[dict],
@@ -376,8 +378,8 @@ class AutoThemeProposer:
 
         triggered = (
             member_count == 0
-            and max_conf < self.OOD_MAX_CONFIDENCE_CUTOFF
-            and core_count >= self.OOD_MIN_CORE_CONCEPTS
+            and max_conf < self.ood_max_confidence_cutoff
+            and core_count >= self.ood_min_core_concepts
         )
 
         audit = {
@@ -385,7 +387,7 @@ class AutoThemeProposer:
             "max_confidence": max_conf,
             "member_count": member_count,
             "core_concept_count": core_count,
-            "ood_max_confidence_cutoff": self.OOD_MAX_CONFIDENCE_CUTOFF,
+            "ood_max_confidence_cutoff": self.ood_max_confidence_cutoff,
         }
         return triggered, audit
 

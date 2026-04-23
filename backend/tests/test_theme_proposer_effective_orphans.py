@@ -241,3 +241,73 @@ def test_empty_llm_assignments_produces_classified_with_zero_counts():
     assert result.audit["core_orphan_count"] == 0
     assert not propose_calls
     assert result.action == "classified"
+
+
+def test_effective_orphan_path_triggers_new_theme_when_ood_gate_skips():
+    """Narrow-window scenario that exercises Task 2's effective-orphan
+    counting AND new-theme trigger:
+    - member_count == 0 (no confidence >= 0.78)
+    - max_conf in [0.75, 0.78) (above Task 3 OOD cutoff of 0.75)
+    - core_count >= 3 (passes core_orphans gate)
+
+    Task 3's article-level OOD gate does NOT fire (max_conf >= 0.75 bar).
+    Task 2's effective-orphan path DOES fire: candidates count as orphans,
+    ratio=1.0 >= 0.6, core_orphans=5 >= 3 → new-theme proposed.
+
+    This locks in that Task 2's triggering behavior still exists in the
+    window between Task 3's cutoff and member_threshold."""
+    proposer = AutoThemeProposer()
+
+    concepts_payload = [
+        {"entry_id": f"e{i}", "canonical_name": f"n-{i}",
+         "concept_type": "Problem" if i % 2 else "Solution"}
+        for i in range(5)
+    ]
+    fake_entries = [
+        {"entry_id": c["entry_id"], "canonical_name": c["canonical_name"],
+         "concept_type": c["concept_type"]}
+        for c in concepts_payload
+    ]
+    existing_theme = _fake_theme("t_existing", "Existing")
+    # All confidences in [0.75, 0.78): above OOD cutoff, below member threshold
+    llm_assignments = [
+        {"entry_id": f"e{i}", "attach_to_theme_id": "t_existing",
+         "confidence": 0.76, "reason": "mid-band"}
+        for i in range(5)
+    ]
+
+    propose_calls: list = []
+    def _capture_propose(orphans, concepts, run_id, article_title):
+        propose_calls.append({"orphan_count": len(orphans)})
+        return {"theme_id": "t_new", "name": "New", "attached_count": len(orphans)}
+
+    with patch(
+        "app.services.auto.theme_proposer.themes.list_themes",
+        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+    ), patch(
+        "app.services.auto.theme_proposer.registry.list_entries",
+        return_value=fake_entries,
+    ), patch.object(
+        AutoThemeProposer, "_classify_via_llm",
+        return_value={"assignments": llm_assignments},
+    ), patch(
+        "app.services.auto.theme_proposer.themes.attach_concepts", return_value=None,
+    ), patch.object(
+        AutoThemeProposer, "_propose_new_theme_candidate", side_effect=_capture_propose,
+    ):
+        result = proposer.process(
+            project_id="p",
+            new_canonical_ids=[c["entry_id"] for c in concepts_payload],
+            run_id="r",
+        )
+
+    # Task 3 OOD gate must NOT fire (max_conf 0.76 >= 0.75 cutoff)
+    assert result.audit["article_level_ood"] is False
+    # Task 2's effective-orphan path fires
+    assert result.audit["member_count"] == 0
+    assert result.audit["candidate_count"] == 5
+    assert result.audit["effective_orphan_count"] == 5
+    assert result.audit["core_orphan_count"] == 5
+    # And produces a new theme
+    assert propose_calls, "Task 2 effective-orphan path must trigger new-theme"
+    assert result.action == "classified_with_new_candidate"
