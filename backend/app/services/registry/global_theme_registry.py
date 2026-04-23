@@ -118,12 +118,20 @@ class GlobalThemeDuplicateError(ValueError):
 # ---------------------------------------------------------------------------
 
 
-def list_themes(*, status: str | None = None) -> list[dict[str, Any]]:
+def list_themes(
+    *,
+    status: str | None = None,
+    domain: str | None = None,
+) -> list[dict[str, Any]]:
     store = _load_themes()
     themes = list(store["themes"].values())
     if status:
         themes = [t for t in themes if t.get("status") == status]
-    # Ensure backward compat
+    if domain is not None:
+        if domain == "unknown":
+            themes = [t for t in themes if "domain" not in t]
+        else:
+            themes = [t for t in themes if t.get("domain") == domain]
     for t in themes:
         t["concept_entry_ids"] = _compat_entry_ids(t)
     themes.sort(key=lambda t: t.get("name", "").lower())
@@ -146,7 +154,18 @@ def create_theme(
     status: str = "active",
     source: str = "user",
     keywords: list[str] | None = None,
+    domain: str | None = None,
 ) -> dict[str, Any]:
+    if domain is None:
+        raise ValueError(
+            "domain is required for new themes (v3 Stage 3). "
+            "Pass domain='tech' or domain='methodology'."
+        )
+    if domain not in {"tech", "methodology"}:
+        raise ValueError(
+            f"invalid domain {domain!r} — must be 'tech' or 'methodology'"
+        )
+
     name = name.strip()
     if not name:
         raise ValueError("name 不能为空")
@@ -166,6 +185,7 @@ def create_theme(
         "description": description,
         "status": status,
         "source": source,
+        "domain": domain,
         "keywords": keywords or [],
         "concept_memberships": [],
         "source_project_clusters": [],

@@ -567,6 +567,7 @@ class AutoThemeProposer:
                 name=theme_name, description=theme_desc,
                 status="candidate", source="auto_candidate",
                 keywords=theme_keywords if isinstance(theme_keywords, list) else [],
+                domain="tech",  # placeholder — Stage 3.2 plumbs project.domain through
             )
 
             orphan_entry_ids = [o["entry_id"] for o in orphans]

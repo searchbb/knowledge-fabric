@@ -39,7 +39,7 @@ class TestGlobalThemeCRUD:
     def test_create_and_list(self, theme_client):
         resp = theme_client.post(
             "/api/registry/themes",
-            json={"name": "AI Safety", "description": "Safety in AI systems"},
+            json={"name": "AI Safety", "description": "Safety in AI systems", "domain": "tech"},
         )
         assert resp.status_code == 201
         data = resp.get_json()["data"]
@@ -54,7 +54,7 @@ class TestGlobalThemeCRUD:
         assert themes[0]["theme_id"] == theme_id
 
     def test_get_single(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "NLP Advances"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "NLP Advances", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         resp = theme_client.get(f"/api/registry/themes/{theme_id}")
@@ -66,7 +66,7 @@ class TestGlobalThemeCRUD:
         assert resp.status_code == 404
 
     def test_update(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "Draft Theme"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "Draft Theme", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         resp = theme_client.put(
@@ -79,7 +79,7 @@ class TestGlobalThemeCRUD:
         assert data["status"] == "archived"
 
     def test_delete(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "To Delete"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "To Delete", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         resp = theme_client.delete(f"/api/registry/themes/{theme_id}")
@@ -89,8 +89,8 @@ class TestGlobalThemeCRUD:
         assert resp.status_code == 404
 
     def test_duplicate_rejected(self, theme_client):
-        theme_client.post("/api/registry/themes", json={"name": "Unique Theme"})
-        resp = theme_client.post("/api/registry/themes", json={"name": "unique theme"})
+        theme_client.post("/api/registry/themes", json={"name": "Unique Theme", "domain": "tech"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "unique theme", "domain": "tech"})
         assert resp.status_code == 409
 
     def test_empty_name_rejected(self, theme_client):
@@ -105,7 +105,7 @@ class TestGlobalThemeCRUD:
 
 class TestGlobalThemeConcepts:
     def test_attach_and_detach_concepts(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "ML Theme"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "ML Theme", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         # Attach
@@ -125,7 +125,7 @@ class TestGlobalThemeConcepts:
         assert resp.get_json()["data"]["concept_entry_ids"] == ["canon_002"]
 
     def test_attach_idempotent(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "Idem Theme"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "Idem Theme", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         theme_client.post(
@@ -146,7 +146,7 @@ class TestGlobalThemeConcepts:
 
 class TestGlobalThemeClusterLinks:
     def test_link_and_unlink_cluster(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "Cluster Theme"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "Cluster Theme", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         # Link
@@ -175,7 +175,7 @@ class TestGlobalThemeClusterLinks:
         assert len(resp.get_json()["data"]["source_project_clusters"]) == 0
 
     def test_link_missing_fields(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "Bad Link"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "Bad Link", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         resp = theme_client.post(
@@ -205,7 +205,7 @@ class TestGlobalThemeSuggest:
 
     def test_suggest_with_existing_match(self, theme_client):
         # Pre-create a global theme
-        theme_client.post("/api/registry/themes", json={"name": "Deep Learning Advances"})
+        theme_client.post("/api/registry/themes", json={"name": "Deep Learning Advances", "domain": "tech"})
 
         pid = _create_project_with_clusters([
             {"id": "tc_1", "name": "Deep Learning Advances", "concept_ids": ["c1"], "status": "active"},
@@ -230,7 +230,7 @@ class TestGlobalThemeSuggest:
 
 class TestCrossProjectTheme:
     def test_two_projects_link_clusters_to_same_theme(self, theme_client):
-        resp = theme_client.post("/api/registry/themes", json={"name": "Shared Theme"})
+        resp = theme_client.post("/api/registry/themes", json={"name": "Shared Theme", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         # Attach concepts

@@ -238,7 +238,7 @@ class TestThemeFlows:
         c1 = e2e.post("/api/registry/concepts", json={"canonical_name": "ML"}).get_json()["data"]["entry_id"]
         c2 = e2e.post("/api/registry/concepts", json={"canonical_name": "DL"}).get_json()["data"]["entry_id"]
 
-        resp = e2e.post("/api/registry/themes", json={"name": "AI Core", "description": "Core AI concepts"})
+        resp = e2e.post("/api/registry/themes", json={"name": "AI Core", "description": "Core AI concepts", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         e2e.post(f"/api/registry/themes/{theme_id}/concepts:attach", json={"concept_entry_ids": [c1, c2]})
@@ -248,7 +248,7 @@ class TestThemeFlows:
 
     def test_12_link_project_cluster_to_theme(self, e2e):
         """Test 12: Link project cluster to global theme."""
-        resp = e2e.post("/api/registry/themes", json={"name": "Safety"})
+        resp = e2e.post("/api/registry/themes", json={"name": "Safety", "domain": "tech"})
         theme_id = resp.get_json()["data"]["theme_id"]
 
         e2e.post(f"/api/registry/themes/{theme_id}/clusters:link", json={
@@ -264,7 +264,7 @@ class TestThemeFlows:
         listing = e2e.get("/api/registry/themes").get_json()["data"]
         assert listing["total"] == 0
 
-        e2e.post("/api/registry/themes", json={"name": "First Theme"})
+        e2e.post("/api/registry/themes", json={"name": "First Theme", "domain": "tech"})
 
         listing = e2e.get("/api/registry/themes").get_json()["data"]
         assert listing["total"] == 1
