@@ -183,9 +183,10 @@ class AutoThemeProposer:
 
         # Article-level OOD pre-gate (v3 OOD fix, 2026-04-23):
         # If every concept's confidence is below member_threshold AND max
-        # confidence is below 0.75, the article is genuinely off-domain.
-        # Skip candidate attaches and go straight to new-theme proposal,
-        # so we don't pollute existing themes with weak cross-domain links.
+        # confidence is below self.ood_max_confidence_cutoff, the article
+        # is genuinely off-domain. Skip candidate attaches and go straight
+        # to new-theme proposal, so we don't pollute existing themes with
+        # weak cross-domain links.
         ood_triggered, ood_audit = self._check_article_level_ood(
             llm_result, concepts
         )
