@@ -32,7 +32,17 @@ logger = logging.getLogger("mirofish.auto_theme_proposer")
 
 # Bumped whenever proposer decision logic changes (GPT C9 audit — lets a bad
 # decision get attributed back to a specific proposer iteration).
-PROPOSER_VERSION = "v3.ood_gate_2026-04-23"
+PROPOSER_VERSION = "v3.domain_core_types_2026-04-23"
+
+# Per-domain "core" concept types used for new-theme-candidate gating.
+# Core types are the concepts that carry enough semantic weight to anchor
+# a new theme proposal. Non-core types (Case, Step, Signal, Antipattern,
+# Example, etc.) are supporting concepts that shouldn't trigger theme
+# creation on their own.
+CORE_CONCEPT_TYPES_BY_DOMAIN: dict[str, set[str]] = {
+    "tech": {"Problem", "Solution", "Architecture", "Topic", "Mechanism"},
+    "methodology": {"Topic", "Problem", "Principle", "Method"},
+}
 
 
 @dataclass
@@ -377,11 +387,13 @@ class AutoThemeProposer:
         confidences = [float(a.get("confidence", 0) or 0) for a in assignments]
         max_conf = max(confidences) if confidences else 0.0
         member_count = sum(1 for c in confidences if c >= self.member_threshold)
+        ood_core_types = CORE_CONCEPT_TYPES_BY_DOMAIN.get(
+            self.project_domain,
+            CORE_CONCEPT_TYPES_BY_DOMAIN["tech"],
+        )
         core_count = sum(
             1 for c in concepts
-            if c.get("concept_type", "") in {
-                "Problem", "Solution", "Architecture", "Topic", "Mechanism",
-            }
+            if c.get("concept_type", "") in ood_core_types
         )
 
         triggered = (
@@ -528,7 +540,10 @@ class AutoThemeProposer:
         )
 
     def _is_core_concept_type(self, entry_id: str, concepts: list[dict]) -> bool:
-        core_types = {"Problem", "Solution", "Architecture", "Topic", "Mechanism"}
+        core_types = CORE_CONCEPT_TYPES_BY_DOMAIN.get(
+            self.project_domain,
+            CORE_CONCEPT_TYPES_BY_DOMAIN["tech"],  # fallback to tech if unknown domain
+        )
         for c in concepts:
             if c["entry_id"] == entry_id:
                 return c.get("concept_type", "") in core_types
@@ -604,9 +619,11 @@ class AutoThemeProposer:
     def _handle_no_themes(
         self, concepts: list[dict], run_id: str, article_title: str,
     ) -> AutoThemeResult:
-        core = [c for c in concepts if c.get("concept_type") in {
-            "Problem", "Solution", "Architecture", "Topic", "Mechanism"
-        }]
+        core_types = CORE_CONCEPT_TYPES_BY_DOMAIN.get(
+            self.project_domain,
+            CORE_CONCEPT_TYPES_BY_DOMAIN["tech"],
+        )
+        core = [c for c in concepts if c.get("concept_type") in core_types]
         if len(core) >= self.min_core_orphans_for_new_theme:
             candidate = self._propose_new_theme_candidate(
                 [{"entry_id": c["entry_id"], "confidence": 0} for c in concepts],
