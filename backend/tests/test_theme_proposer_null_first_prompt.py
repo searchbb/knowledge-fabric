@@ -13,7 +13,8 @@ from app.services.auto.theme_proposer import AutoThemeProposer
 
 
 def test_system_prompt_contains_null_first_instruction():
-    """The LLM must be told that weak matches are worse than null."""
+    """The LLM must be told that weak matches are worse than null, and must
+    get an explicit numeric threshold consistent with candidate_threshold."""
     proposer = AutoThemeProposer()
     captured_messages: list[list[dict]] = []
 
@@ -36,15 +37,34 @@ def test_system_prompt_contains_null_first_instruction():
 
     assert captured_messages, "LLM should have been called"
     system_msg = captured_messages[0][0]["content"]
-    assert "null" in system_msg, f"system prompt missing null instruction: {system_msg!r}"
-    assert ("勉强" in system_msg) or ("弱" in system_msg) or ("宁可" in system_msg), (
+
+    # The weak-match-is-worse framing must be present (this is the real
+    # behavior-change instruction — "null" alone is too weak; the old v2
+    # prompt also contained the word "null" in its return-format description).
+    assert ("勉强" in system_msg) or ("宁可" in system_msg), (
         f"system prompt missing weak-match-discouraged framing: {system_msg!r}"
     )
+    # The null threshold must be explicitly stated and aligned with the
+    # configured candidate_threshold (0.55). A stricter bar (0.6) would
+    # push legitimate 0.55-0.60 in-domain attaches to null and fragment themes.
+    assert "0.55" in system_msg, (
+        f"system prompt must reference the 0.55 candidate_threshold explicitly: {system_msg!r}"
+    )
+    # The null option must be named in an instructional context, not just
+    # in the return-format description. Check that "null" is mentioned near
+    # "必须" or "返回" within the discipline section.
+    import re
+    if not re.search(r"(必须|返回).{0,30}null|null.{0,30}(必须|返回)", system_msg):
+        raise AssertionError(
+            f"'null' must appear in an imperative instruction (必须/返回), "
+            f"not only in return-format description: {system_msg!r}"
+        )
 
 
-def test_system_prompt_removes_one_way_reuse_pressure():
-    """The old '优先复用已有主题' phrasing created the force-fit bias. The new
-    prompt should not contain unqualified reuse pressure."""
+def test_system_prompt_does_not_contain_unconditional_reuse_pressure():
+    """Any mention of '优先复用' must be paired with a null-caveat in the
+    same discipline block. Old v2 phrasing was bare reuse pressure; new v3
+    must not reintroduce it in any form."""
     proposer = AutoThemeProposer()
     captured_messages: list[list[dict]] = []
 
@@ -63,6 +83,21 @@ def test_system_prompt_removes_one_way_reuse_pressure():
         )
 
     system_msg = captured_messages[0][0]["content"]
-    assert "优先复用已有主题，谨慎提议新主题。" not in system_msg, (
-        "unqualified reuse pressure must be removed or softened"
-    )
+
+    # If the prompt mentions "优先复用" anywhere, there must be a null-caveat
+    # nearby ("null" or "若真的相关" or similar qualifier) — bare reuse
+    # pressure is the exact bug v3 is fixing.
+    if "优先复用" in system_msg or "优先归" in system_msg:
+        # Look at the paragraph containing the reuse phrase.
+        # Paragraphs are separated by blank lines (\n\n).
+        paragraphs = system_msg.split("\n\n")
+        for para in paragraphs:
+            if "优先复用" in para or "优先归" in para:
+                assert (
+                    "null" in para
+                    or "若真的相关" in para
+                    or "真的相关" in para
+                ), (
+                    f"paragraph with reuse pressure lacks null-caveat or "
+                    f"'真的相关' qualifier: {para!r}"
+                )
