@@ -76,3 +76,42 @@ def test_resolve_domain_auto_with_text_invokes_classifier():
             {"domain": "auto"}, article_text="some article content"
         )
     assert resolved == "methodology"
+
+
+def test_resolve_domain_auto_below_threshold_falls_back_to_tech():
+    """If classifier returns primary=methodology but confidence is below
+    AUTO_FALLBACK_CONFIDENCE_THRESHOLD (0.65), dispatcher must fall back to
+    tech (tech-safe default per GPT consult)."""
+    with patch(
+        "app.services.extraction.ontology_dispatcher.DomainClassifier"
+    ) as mock_cls:
+        mock_cls.return_value.classify.return_value = {
+            "primary": "methodology",
+            "confidence": 0.4,  # below 0.65
+            "secondary": None,
+            "secondary_confidence": 0.0,
+            "reason": "test low-confidence",
+        }
+        resolved = resolve_project_domain(
+            {"domain": "auto"}, article_text="some article content"
+        )
+    assert resolved == "tech"
+
+
+def test_resolve_domain_auto_tech_with_high_confidence_returns_tech():
+    """Classifier returns tech with high confidence → resolved_domain=tech
+    (this branch wasn't explicitly covered either)."""
+    with patch(
+        "app.services.extraction.ontology_dispatcher.DomainClassifier"
+    ) as mock_cls:
+        mock_cls.return_value.classify.return_value = {
+            "primary": "tech",
+            "confidence": 0.9,
+            "secondary": None,
+            "secondary_confidence": 0.0,
+            "reason": "",
+        }
+        resolved = resolve_project_domain(
+            {"domain": "auto"}, article_text="article"
+        )
+    assert resolved == "tech"

@@ -828,35 +828,49 @@ class AutoPipelineRunner:
         )
 
     def _resolve_project_domain(self, project_id: str) -> str:
-        """Fetch the project and return its effective domain for theme scoping.
+        """Resolve the project's effective domain for theme scoping.
 
-        Priority order:
-          1. ontology_metadata.resolved_domain (set by domain classifier)
-          2. project.domain (user-selected value, e.g. 'tech'/'methodology')
-          3. 'tech' fallback (legacy projects, or 'auto' that was never resolved)
+        Priority chain:
+        1. project.ontology_metadata.resolved_domain (classifier decision)
+        2. project.domain (user selection or classifier-result-that-wasn't-stored)
+        3. 'tech' fallback (legacy projects / missing)
+
+        'auto' at either level is coerced to 'tech' — should not occur after
+        Stage 2 wiring because /ontology/generate resolves before persisting,
+        but guard against it.
         """
+        from ...models.project import ProjectManager
+
         try:
-            body = self._http_get(
-                f"{self.backend_base_url}/api/graph/project/{project_id}"
+            project = ProjectManager.get_project(
+                project_id, include_legacy_phase1_backfill=False,
             )
-            project = body.get("data") or {}
-            metadata = project.get("ontology_metadata") or {}
-            resolved = metadata.get("resolved_domain")
-            if resolved and resolved != "auto":
-                return resolved
-            domain = project.get("domain") or "tech"
-            if domain == "auto":
-                # 'auto' should have been resolved before this point; if it
-                # sneaks through (e.g., classifier never ran), fall back to tech.
-                return "tech"
-            return domain
-        except Exception:  # noqa: BLE001
+        except Exception as e:
             logger.warning(
-                "auto pipeline: could not resolve domain for project %s, "
-                "defaulting to 'tech'",
+                "_resolve_project_domain: could not load project %s — falling back to 'tech': %s",
+                project_id, e,
+            )
+            return "tech"
+
+        if project is None:
+            logger.warning(
+                "_resolve_project_domain: project %s not found — falling back to 'tech'",
                 project_id,
             )
             return "tech"
+
+        metadata = project.ontology_metadata or {}
+        effective = metadata.get("resolved_domain") or project.domain or "tech"
+
+        if effective == "auto":
+            logger.warning(
+                "_resolve_project_domain: project %s still has 'auto' domain "
+                "(classifier didn't run or didn't persist) — falling back to 'tech'",
+                project_id,
+            )
+            return "tech"
+
+        return effective
 
     def _schedule_discover_job(
         self,
