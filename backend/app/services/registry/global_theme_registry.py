@@ -172,9 +172,17 @@ def create_theme(
 
     store = _load_themes()
     name_lower = name.lower()
+    # Uniqueness check is domain-scoped (v3 domain-scoped ontology): themes
+    # in different domains (tech/methodology) can legitimately share a name.
+    # Legacy themes without a 'domain' field are treated as 'unknown' — new
+    # themes in tech/methodology never collide with them regardless of name.
     for existing in store["themes"].values():
-        if existing["name"].lower() == name_lower:
-            raise GlobalThemeDuplicateError(f"已存在同名全局主题: {existing['name']}")
+        if existing["name"].lower() != name_lower:
+            continue
+        if existing.get("domain") == domain:
+            raise GlobalThemeDuplicateError(
+                f"已存在同名全局主题 (domain={domain}): {existing['name']}"
+            )
 
     now = datetime.now().isoformat()
     theme_id = f"gtheme_{uuid_mod.uuid4().hex[:10]}"
