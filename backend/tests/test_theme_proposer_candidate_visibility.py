@@ -49,7 +49,7 @@ def test_process_loads_both_active_and_candidate_themes():
         for eid in ["e_old1", "e_old2", "e_new1", "e_new2"]
     ]
 
-    def _list_themes(*, status=None):
+    def _list_themes(*, status=None, **kwargs):
         if status == "active":
             return [existing_active]
         if status == "candidate":

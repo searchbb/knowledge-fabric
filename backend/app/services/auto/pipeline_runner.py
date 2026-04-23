@@ -813,13 +813,50 @@ class AutoPipelineRunner:
         new_canonical_ids: list[str],
         run_id: str,
     ) -> AutoThemeResult:
+        # Resolve the project's effective domain. Priority:
+        # 1. ontology_metadata.resolved_domain (what the classifier decided)
+        # 2. project.domain (what the user selected)
+        # 3. 'tech' fallback (legacy projects / auto-without-text)
+        effective_domain = self._resolve_project_domain(project_id)
         return self.theme_proposer.process(
             project_id=project_id,
             project_name=project_name,
             article_title=article_title,
             new_canonical_ids=new_canonical_ids,
             run_id=run_id,
+            project_domain=effective_domain,
         )
+
+    def _resolve_project_domain(self, project_id: str) -> str:
+        """Fetch the project and return its effective domain for theme scoping.
+
+        Priority order:
+          1. ontology_metadata.resolved_domain (set by domain classifier)
+          2. project.domain (user-selected value, e.g. 'tech'/'methodology')
+          3. 'tech' fallback (legacy projects, or 'auto' that was never resolved)
+        """
+        try:
+            body = self._http_get(
+                f"{self.backend_base_url}/api/graph/project/{project_id}"
+            )
+            project = body.get("data") or {}
+            metadata = project.get("ontology_metadata") or {}
+            resolved = metadata.get("resolved_domain")
+            if resolved and resolved != "auto":
+                return resolved
+            domain = project.get("domain") or "tech"
+            if domain == "auto":
+                # 'auto' should have been resolved before this point; if it
+                # sneaks through (e.g., classifier never ran), fall back to tech.
+                return "tech"
+            return domain
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "auto pipeline: could not resolve domain for project %s, "
+                "defaulting to 'tech'",
+                project_id,
+            )
+            return "tech"
 
     def _schedule_discover_job(
         self,

@@ -119,3 +119,102 @@ def test_legacy_theme_without_domain_treated_as_unknown(isolated_store):
     unknown = reg.list_themes(domain="unknown")
     assert len(unknown) == 1
     assert unknown[0]["name"] == "legacy"
+
+
+def test_proposer_only_sees_themes_of_its_project_domain(isolated_store, monkeypatch):
+    """AutoThemeProposer must filter list_themes by the project's domain so
+    tech articles only see tech themes and methodology articles only see
+    methodology themes."""
+    from unittest.mock import patch
+    from app.services.auto.theme_proposer import AutoThemeProposer
+    from app.services.registry import global_concept_registry as cr
+
+    # Seed 1 tech + 1 methodology theme
+    reg.create_theme(name="TechT", status="active", source="s", domain="tech")
+    reg.create_theme(name="MethT", status="active", source="s", domain="methodology")
+
+    monkeypatch.setattr(
+        cr, "list_entries",
+        lambda: [{"entry_id": "e1", "canonical_name": "x", "concept_type": "Topic"}],
+    )
+
+    # Run proposer for a tech project — must only see TechT
+    proposer = AutoThemeProposer(project_domain="tech")
+    with patch.object(
+        AutoThemeProposer, "_classify_via_llm",
+        return_value={"assignments": []},
+    ):
+        result = proposer.process(
+            project_id="p",
+            new_canonical_ids=["e1"],
+            run_id="r",
+        )
+
+    assert result.audit.get("project_domain") == "tech"
+    classifiable = result.audit.get("classifiable_theme_ids", [])
+    tech_theme = next(
+        t for t in reg.list_themes(domain="tech") if t["name"] == "TechT"
+    )
+    meth_theme = next(
+        t for t in reg.list_themes(domain="methodology") if t["name"] == "MethT"
+    )
+    assert tech_theme["theme_id"] in classifiable
+    assert meth_theme["theme_id"] not in classifiable
+
+
+def test_proposer_created_theme_inherits_project_domain(isolated_store, monkeypatch):
+    """When _propose_new_theme_candidate creates a new theme, it must use
+    the proposer's project_domain (not hardcoded tech)."""
+    from unittest.mock import patch
+    from app.services.auto.theme_proposer import AutoThemeProposer
+    from app.services.registry import global_concept_registry as cr
+
+    concepts_payload = [
+        {"entry_id": f"e{i}", "canonical_name": f"n{i}", "concept_type": "Problem"}
+        for i in range(5)
+    ]
+    monkeypatch.setattr(cr, "list_entries", lambda: concepts_payload)
+
+    proposer = AutoThemeProposer(project_domain="methodology")
+    # Simulate no existing methodology themes + LLM returns all-null so
+    # article-level OOD fires, which calls _propose_new_theme_candidate
+    created_themes: list[dict] = []
+
+    def _spy_create(**kwargs):
+        created_themes.append(kwargs)
+        return {
+            "theme_id": "t_new", "name": kwargs.get("name"),
+            "status": kwargs.get("status"), "domain": kwargs.get("domain"),
+            "keywords": kwargs.get("keywords", []),
+            "concept_memberships": [],
+        }
+
+    with patch.object(
+        AutoThemeProposer, "_classify_via_llm",
+        return_value={"assignments": [
+            {"entry_id": f"e{i}", "attach_to_theme_id": None,
+             "confidence": 0.2, "reason": "no match"}
+            for i in range(5)
+        ]},
+    ), patch(
+        "app.services.auto.theme_proposer.themes.create_theme",
+        side_effect=_spy_create,
+    ), patch(
+        "app.services.auto.theme_proposer.themes.attach_concepts",
+        return_value=None,
+    ), patch(
+        "app.services.auto.theme_proposer.LLMClient",
+    ) as mock_llm_cls:
+        # Inner LLM call for theme naming
+        mock_llm_cls.return_value.chat_json.return_value = {
+            "name": "Method Theme", "description": "d", "keywords": ["k"],
+        }
+        proposer.process(
+            project_id="p",
+            new_canonical_ids=[c["entry_id"] for c in concepts_payload],
+            run_id="r",
+            article_title="a",
+        )
+
+    assert created_themes, "new theme should have been created"
+    assert created_themes[0]["domain"] == "methodology"

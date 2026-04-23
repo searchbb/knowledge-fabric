@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from ..registry import global_theme_registry as themes
 from ..registry import global_concept_registry as registry
+from ...utils.llm_client import LLMClient
 
 logger = logging.getLogger("mirofish.auto_theme_proposer")
 
@@ -85,6 +86,7 @@ class AutoThemeProposer:
         ood_min_core_concepts: int = 3,
         actor_id: str = "auto_pipeline",
         source: str = "auto_url_pipeline",
+        project_domain: str = "tech",  # v3 Stage 3: scope themes to this domain
     ):
         self.member_threshold = member_threshold
         self.candidate_threshold = candidate_threshold
@@ -95,6 +97,7 @@ class AutoThemeProposer:
         self.ood_min_core_concepts = ood_min_core_concepts
         self.actor_id = actor_id
         self.source = source
+        self.project_domain = project_domain
 
     def process(
         self,
@@ -104,8 +107,15 @@ class AutoThemeProposer:
         new_canonical_ids: list[str],
         run_id: str = "",
         article_title: str = "",
+        project_domain: Optional[str] = None,
     ) -> AutoThemeResult:
-        """Classify new canonical concepts into existing themes."""
+        """Classify new canonical concepts into existing themes.
+
+        ``project_domain`` overrides ``self.project_domain`` for this call only;
+        useful when the pipeline_runner resolves the per-project domain at
+        run-time and passes it in without reinstantiating the proposer.
+        """
+        effective_domain = project_domain if project_domain is not None else self.project_domain
         # Snapshot the thresholds this run used so audit can explain post-hoc
         # why a concept attached/didn't after any future tuning.
         threshold_snapshot = {
@@ -115,19 +125,6 @@ class AutoThemeProposer:
             "min_core_orphans_for_new_theme": self.min_core_orphans_for_new_theme,
         }
 
-        if len(new_canonical_ids) < self.min_concepts_for_action:
-            return AutoThemeResult(
-                action="noop",
-                reason=f"only {len(new_canonical_ids)} canonical(s), need >= {self.min_concepts_for_action}",
-                audit={
-                    "proposer_version": PROPOSER_VERSION,
-                    "threshold_snapshot": threshold_snapshot,
-                    "visible_active_theme_count": 0,
-                    "visible_candidate_theme_count": 0,
-                    "skip_reason": "below_min_concepts",
-                },
-            )
-
         # Plumbing fix (GPT consult d10c98cab0b64a56 rule 1, 2026-04-16):
         # before this, only status="active" themes were visible to the
         # proposer — but auto-created themes are always status="candidate"
@@ -135,17 +132,28 @@ class AutoThemeProposer:
         # active-theme list → created its own theme island. Include
         # candidate themes in the classification working set. Keep
         # list_themes(status="active") semantics intact for other callers.
-        active_themes = themes.list_themes(status="active")
-        candidate_themes = themes.list_themes(status="candidate")
+        # Domain filter applied here (v3 Stage 3.2): only themes in this
+        # project's domain are visible, preventing cross-domain bleed.
+        active_themes = themes.list_themes(status="active", domain=effective_domain)
+        candidate_themes = themes.list_themes(status="candidate", domain=effective_domain)
         classifiable_themes = list(active_themes) + list(candidate_themes)
 
         audit: dict[str, Any] = {
             "proposer_version": PROPOSER_VERSION,
             "threshold_snapshot": threshold_snapshot,
+            "project_domain": effective_domain,
             "visible_active_theme_count": len(active_themes),
             "visible_candidate_theme_count": len(candidate_themes),
             "classifiable_theme_ids": [t["theme_id"] for t in classifiable_themes][:20],
         }
+
+        if len(new_canonical_ids) < self.min_concepts_for_action:
+            audit["skip_reason"] = "below_min_concepts"
+            return AutoThemeResult(
+                action="noop",
+                reason=f"only {len(new_canonical_ids)} canonical(s), need >= {self.min_concepts_for_action}",
+                audit=audit,
+            )
 
         concepts = self._load_concept_details(new_canonical_ids)
 
@@ -241,7 +249,6 @@ class AutoThemeProposer:
         active_themes: list[dict],
         article_title: str = "",
     ) -> dict:
-        from ...utils.llm_client import LLMClient
         llm = LLMClient()
 
         themes_for_prompt = []
@@ -535,7 +542,6 @@ class AutoThemeProposer:
         orphan_concepts = [c for c in concepts if c["entry_id"] in orphan_ids]
 
         try:
-            from ...utils.llm_client import LLMClient
             llm = LLMClient()
 
             concept_list = "\n".join(
@@ -567,7 +573,7 @@ class AutoThemeProposer:
                 name=theme_name, description=theme_desc,
                 status="candidate", source="auto_candidate",
                 keywords=theme_keywords if isinstance(theme_keywords, list) else [],
-                domain="tech",  # placeholder — Stage 3.2 plumbs project.domain through
+                domain=self.project_domain,
             )
 
             orphan_entry_ids = [o["entry_id"] for o in orphans]

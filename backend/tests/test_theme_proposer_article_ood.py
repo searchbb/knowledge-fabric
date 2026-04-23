@@ -44,7 +44,7 @@ def test_article_level_ood_skips_attaches_and_proposes_new_theme():
 
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [_fake_theme("t1")] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [_fake_theme("t1")] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,
@@ -99,7 +99,7 @@ def test_near_member_confidence_does_not_trigger_ood_gate():
 
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [_fake_theme("t1")] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [_fake_theme("t1")] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,
@@ -144,7 +144,7 @@ def test_any_member_confidence_prevents_ood_gate():
 
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [_fake_theme("t1")] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [_fake_theme("t1")] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,

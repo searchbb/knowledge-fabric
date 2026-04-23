@@ -108,7 +108,7 @@ def test_proj_39a354d2c50e_produces_new_theme_candidate():
     propose_calls: list = []
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: active_themes if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: active_themes if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,

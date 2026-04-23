@@ -50,7 +50,7 @@ def test_all_candidate_run_with_zero_members_triggers_new_theme():
 
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [existing_theme] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,
@@ -107,7 +107,7 @@ def test_mixed_run_with_some_members_uses_real_orphan_count():
     propose_calls: list = []
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [existing_theme] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,
@@ -160,7 +160,7 @@ def test_all_candidate_run_below_core_orphan_threshold_does_not_trigger():
     propose_calls: list = []
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [existing_theme] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,
@@ -212,7 +212,7 @@ def test_empty_llm_assignments_produces_classified_with_zero_counts():
     propose_calls: list = []
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [existing_theme] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,
@@ -283,7 +283,7 @@ def test_effective_orphan_path_triggers_new_theme_when_ood_gate_skips():
 
     with patch(
         "app.services.auto.theme_proposer.themes.list_themes",
-        side_effect=lambda *, status=None: [existing_theme] if status in (None, "active") else [],
+        side_effect=lambda *, status=None, **kw: [existing_theme] if status in (None, "active") else [],
     ), patch(
         "app.services.auto.theme_proposer.registry.list_entries",
         return_value=fake_entries,
