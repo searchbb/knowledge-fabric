@@ -19,9 +19,10 @@ def _fake_theme(theme_id: str, name: str, status: str = "active") -> dict:
 
 
 def test_all_candidate_run_with_zero_members_triggers_new_theme():
-    """20 concepts all at candidate confidence (0.6-0.7), zero members:
-    orphan_ratio should count unmembered candidates as effective orphans,
-    pushing the ratio over 0.6 and triggering _propose_new_theme_candidate."""
+    """20 concepts all at candidate confidence (0.65, < 0.75), zero members:
+    Task 3 article-level OOD gate fires first (max_conf < 0.75 AND member_count==0
+    AND core_count >= 3), skipping _apply_classification entirely and going
+    straight to _propose_new_theme_candidate."""
     proposer = AutoThemeProposer()
 
     concepts_payload = [
@@ -68,11 +69,11 @@ def test_all_candidate_run_with_zero_members_triggers_new_theme():
             article_title="OOD article",
         )
 
-    # Audit must show the new fields
+    # Article-level OOD gate (Task 3) fires: all assignments weak + max < 0.75
+    assert result.audit["article_level_ood"] is True
     assert result.audit["member_count"] == 0
-    assert result.audit["candidate_count"] == 20
-    assert result.audit["effective_orphan_count"] == 20
-    # And the new-theme path was reached
+    assert result.audit["max_confidence"] < 0.75
+    # And the new-theme path was reached (gate goes straight to proposal)
     assert propose_calls, "new-theme candidate should have been proposed"
     assert result.action == "classified_with_new_candidate"
 
@@ -190,13 +191,17 @@ def test_empty_llm_assignments_produces_classified_with_zero_counts():
     """LLM returns {'assignments': []}: degenerate case, no attaches, no
     orphans, no new-theme proposal. Audit must still be populated with zeros
     (not KeyError). The max(len(assignments_raw), 1) guard must prevent
-    zero-division in orphan_ratio."""
+    zero-division in orphan_ratio.
+
+    Uses only 2 core-type concepts so the article-level OOD gate (Task 3)
+    does NOT fire (core_count=2 < OOD_MIN_CORE_CONCEPTS=3), ensuring
+    _apply_classification receives the empty assignments list."""
     proposer = AutoThemeProposer()
 
+    # Only 2 core-type concepts — stays below OOD_MIN_CORE_CONCEPTS=3
     concepts_payload = [
         {"entry_id": "e0", "canonical_name": "c0", "concept_type": "Problem"},
         {"entry_id": "e1", "canonical_name": "c1", "concept_type": "Solution"},
-        {"entry_id": "e2", "canonical_name": "c2", "concept_type": "Topic"},
     ]
     fake_entries = [
         {"entry_id": c["entry_id"], "canonical_name": c["canonical_name"],
@@ -226,6 +231,8 @@ def test_empty_llm_assignments_produces_classified_with_zero_counts():
             run_id="r",
         )
 
+    # OOD gate must NOT fire (core_count=2 < 3)
+    assert result.audit["article_level_ood"] is False
     # Graceful degradation: all zero counts, no crashes
     assert result.audit["member_count"] == 0
     assert result.audit["candidate_count"] == 0

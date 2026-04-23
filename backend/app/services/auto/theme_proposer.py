@@ -31,7 +31,7 @@ logger = logging.getLogger("mirofish.auto_theme_proposer")
 
 # Bumped whenever proposer decision logic changes (GPT C9 audit — lets a bad
 # decision get attributed back to a specific proposer iteration).
-PROPOSER_VERSION = "v3.effective_orphans_2026-04-23"
+PROPOSER_VERSION = "v3.ood_gate_2026-04-23"
 
 
 @dataclass
@@ -177,6 +177,38 @@ class AutoThemeProposer:
                     audit=audit,
                 )
 
+        # Article-level OOD pre-gate (v3 OOD fix, 2026-04-23):
+        # If every concept's confidence is below member_threshold AND max
+        # confidence is below 0.75, the article is genuinely off-domain.
+        # Skip candidate attaches and go straight to new-theme proposal,
+        # so we don't pollute existing themes with weak cross-domain links.
+        ood_triggered, ood_audit = self._check_article_level_ood(
+            llm_result, concepts
+        )
+        audit.update(ood_audit)
+
+        if ood_triggered:
+            audit["decision"] = "article_level_ood"
+            fake_orphans = [
+                {"entry_id": c["entry_id"], "confidence": 0.0,
+                 "reason": "article_level_ood"}
+                for c in concepts
+            ]
+            new_candidate = self._propose_new_theme_candidate(
+                fake_orphans, concepts, run_id, article_title
+            )
+            return AutoThemeResult(
+                action="classified_with_new_candidate" if new_candidate else "noop",
+                assignments=[],
+                new_candidate_theme=new_candidate,
+                orphan_count=len(concepts),
+                reason="article-level OOD: uniform weak LLM output",
+                theme_id=new_candidate["theme_id"] if new_candidate else None,
+                theme_name=new_candidate["name"] if new_candidate else None,
+                attached_concept_ids=[],
+                audit=audit,
+            )
+
         result = self._apply_classification(
             llm_result, concepts, classifiable_themes, run_id, article_title
         )
@@ -309,6 +341,53 @@ class AutoThemeProposer:
                 "reason": "keyword_fallback",
             })
         return {"assignments": assignments} if assignments else None
+
+    # Article-level OOD detection constants (v3 OOD fix):
+    # - min_max_confidence_for_in_domain: if max assignment confidence is
+    #   below this, the article's best guess is too weak to trust.
+    # - min_core_concepts_for_ood: minimum core-type concepts required
+    #   before the gate is allowed to fire (guards against tiny-article
+    #   false positives).
+    OOD_MAX_CONFIDENCE_CUTOFF = 0.75
+    OOD_MIN_CORE_CONCEPTS = 3
+
+    def _check_article_level_ood(
+        self, llm_result: dict, concepts: list[dict],
+    ) -> tuple[bool, dict]:
+        """Detect article-level out-of-domain.
+
+        Fires when: (a) no concept's assignment confidence reaches
+        member_threshold, AND (b) max confidence is below
+        OOD_MAX_CONFIDENCE_CUTOFF, AND (c) at least OOD_MIN_CORE_CONCEPTS
+        core-type concepts exist in the article.
+
+        Returns (triggered, audit_fields).
+        """
+        assignments = llm_result.get("assignments", []) or []
+        confidences = [float(a.get("confidence", 0) or 0) for a in assignments]
+        max_conf = max(confidences) if confidences else 0.0
+        member_count = sum(1 for c in confidences if c >= self.member_threshold)
+        core_count = sum(
+            1 for c in concepts
+            if c.get("concept_type", "") in {
+                "Problem", "Solution", "Architecture", "Topic", "Mechanism",
+            }
+        )
+
+        triggered = (
+            member_count == 0
+            and max_conf < self.OOD_MAX_CONFIDENCE_CUTOFF
+            and core_count >= self.OOD_MIN_CORE_CONCEPTS
+        )
+
+        audit = {
+            "article_level_ood": triggered,
+            "max_confidence": max_conf,
+            "member_count": member_count,
+            "core_concept_count": core_count,
+            "ood_max_confidence_cutoff": self.OOD_MAX_CONFIDENCE_CUTOFF,
+        }
+        return triggered, audit
 
     def _apply_classification(
         self,
