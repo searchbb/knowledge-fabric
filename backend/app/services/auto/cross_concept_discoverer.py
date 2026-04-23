@@ -180,8 +180,12 @@ def _is_transient_error(exc: BaseException) -> bool:
     return any(s in msg for s in _TRANSIENT_ERROR_SUBSTRINGS)
 
 
-# Types that tend to form cross-article bridges
+# Types that tend to form cross-article bridges. Checked in both directions
+# via _score_pair. Covers tech domain (original set) + methodology domain
+# (v3 addition — so methodology concepts also get the complementary-pair
+# bonus when discovered cross-project).
 _COMPLEMENTARY_TYPE_PAIRS = {
+    # Tech domain
     ("Problem", "Solution"),
     ("Problem", "Technology"),
     ("Topic", "Technology"),
@@ -191,6 +195,16 @@ _COMPLEMENTARY_TYPE_PAIRS = {
     ("Constraint", "Technology"),
     ("Evidence", "Topic"),
     ("Example", "Topic"),
+    # Methodology domain (v3 2026-04-23)
+    ("Problem", "Method"),
+    ("Problem", "Principle"),
+    ("Principle", "Method"),
+    ("Method", "Case"),
+    ("Principle", "Antipattern"),
+    ("Method", "Antipattern"),
+    ("Topic", "Method"),
+    ("Topic", "Principle"),
+    ("Problem", "Signal"),
 }
 
 # Relation type definitions for LLM prompt
