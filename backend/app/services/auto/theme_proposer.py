@@ -31,7 +31,7 @@ logger = logging.getLogger("mirofish.auto_theme_proposer")
 
 # Bumped whenever proposer decision logic changes (GPT C9 audit — lets a bad
 # decision get attributed back to a specific proposer iteration).
-PROPOSER_VERSION = "v2.candidate_visible_2026-04-16"
+PROPOSER_VERSION = "v3.ood_gate_2026-04-23"
 
 
 @dataclass
@@ -81,6 +81,8 @@ class AutoThemeProposer:
         min_concepts_for_action: int = 2,
         orphan_ratio_for_new_theme: float = 0.6,
         min_core_orphans_for_new_theme: int = 3,
+        ood_max_confidence_cutoff: float = 0.75,
+        ood_min_core_concepts: int = 3,
         actor_id: str = "auto_pipeline",
         source: str = "auto_url_pipeline",
     ):
@@ -89,6 +91,8 @@ class AutoThemeProposer:
         self.min_concepts_for_action = min_concepts_for_action
         self.orphan_ratio_for_new_theme = orphan_ratio_for_new_theme
         self.min_core_orphans_for_new_theme = min_core_orphans_for_new_theme
+        self.ood_max_confidence_cutoff = ood_max_confidence_cutoff
+        self.ood_min_core_concepts = ood_min_core_concepts
         self.actor_id = actor_id
         self.source = source
 
@@ -177,6 +181,39 @@ class AutoThemeProposer:
                     audit=audit,
                 )
 
+        # Article-level OOD pre-gate (v3 OOD fix, 2026-04-23):
+        # If every concept's confidence is below member_threshold AND max
+        # confidence is below self.ood_max_confidence_cutoff, the article
+        # is genuinely off-domain. Skip candidate attaches and go straight
+        # to new-theme proposal, so we don't pollute existing themes with
+        # weak cross-domain links.
+        ood_triggered, ood_audit = self._check_article_level_ood(
+            llm_result, concepts
+        )
+        audit.update(ood_audit)
+
+        if ood_triggered:
+            audit["decision"] = "article_level_ood"
+            fake_orphans = [
+                {"entry_id": c["entry_id"], "confidence": 0.0,
+                 "reason": "article_level_ood"}
+                for c in concepts
+            ]
+            new_candidate = self._propose_new_theme_candidate(
+                fake_orphans, concepts, run_id, article_title
+            )
+            return AutoThemeResult(
+                action="classified_with_new_candidate" if new_candidate else "noop",
+                assignments=[],
+                new_candidate_theme=new_candidate,
+                orphan_count=len(concepts),
+                reason="article-level OOD: uniform weak LLM output",
+                theme_id=new_candidate["theme_id"] if new_candidate else None,
+                theme_name=new_candidate["name"] if new_candidate else None,
+                attached_concept_ids=[],
+                audit=audit,
+            )
+
         result = self._apply_classification(
             llm_result, concepts, classifiable_themes, run_id, article_title
         )
@@ -234,14 +271,22 @@ class AutoThemeProposer:
 
         system_prompt = (
             "你是知识治理系统中的主题归属判定器。\n"
-            "你的任务不是为每篇文章发明新主题，而是把 canonical 概念归入少量稳定的全局主题。\n"
-            "优先复用已有主题，谨慎提议新主题。\n"
-            "主题列表中每个主题都带有 status 字段：\n"
-            "  - status=active 表示该主题已稳定运行，跨多文章存在；优先归到这里。\n"
-            "  - status=candidate 表示该主题仍在观察期（单文章/新建）；可以归入，\n"
-            "    但证据需要略强（如多个概念和该主题高度相关），否则说明是另一个主题域。\n"
+            "你的任务是判断每个 canonical 概念是否真的属于某个已有全局主题。\n"
+            "\n"
+            "关键纪律（null-first）：\n"
+            "  - 如果一个概念与所有已有主题的真实相关度都低于 0.55，\n"
+            "    必须返回 attach_to_theme_id=null，不要硬凑。\n"
+            "  - 勉强匹配（关键词撞车、表面相似）比留空更糟：\n"
+            "    它会污染主题，也会阻止系统识别这是一篇需要新主题的文章。\n"
+            "  - 宁可多个 null，也不要 0.55-0.78 的\"差不多\"归属。\n"
+            "\n"
+            "主题列表中每个主题带有 status：\n"
+            "  - active：稳定运行、跨多文章存在。若真的相关，优先归到这里。\n"
+            "  - candidate：观察期（单文章/新建）。可以归入，但证据需要更强。\n"
+            "\n"
             "主题应该是可跨文章持续累积的问题域、方法域或工作域。\n"
-            "工具名/产品名/单篇文章标题通常不是主题。\n"
+            "工具名、产品名、单篇文章标题通常不是主题。\n"
+            "\n"
             "严格返回 JSON，不要输出 markdown。"
         )
 
@@ -254,9 +299,12 @@ class AutoThemeProposer:
 
         user_prompt += (
             "对每个 concept 判断：\n"
-            '- attach_to_theme_id: 归属的已有主题ID，或 null（表示无法归入）\n'
-            '- confidence: 0~1 的置信度\n'
-            '- reason: 一句话理由\n\n'
+            "- attach_to_theme_id: 归属主题ID；如果没有真正合适的主题，请返回 null。\n"
+            "- confidence: 0~1 的置信度。\n"
+            "  * >= 0.78 表示这个概念确实属于该主题的核心范畴。\n"
+            "  * 0.55-0.78 表示相关但不核心；只在确实相关时使用，禁止用于凑数。\n"
+            "  * < 0.55 请直接返回 attach_to_theme_id=null。\n"
+            "- reason: 一句话理由。\n\n"
             "严格返回 JSON，格式：\n"
             '{"assignments": [{"entry_id": "...", "attach_to_theme_id": "..." | null, '
             '"confidence": 0.85, "reason": "..."}]}'
@@ -298,6 +346,51 @@ class AutoThemeProposer:
                 "reason": "keyword_fallback",
             })
         return {"assignments": assignments} if assignments else None
+
+    # Article-level OOD detection (v3 OOD fix, configured via __init__):
+    # - ood_max_confidence_cutoff: if max assignment confidence is below
+    #   this, the article's best guess is too weak to trust.
+    # - ood_min_core_concepts: minimum core-type concepts required before
+    #   the gate is allowed to fire (guards against tiny-article false
+    #   positives).
+
+    def _check_article_level_ood(
+        self, llm_result: dict, concepts: list[dict],
+    ) -> tuple[bool, dict]:
+        """Detect article-level out-of-domain.
+
+        Fires when: (a) no concept's assignment confidence reaches
+        member_threshold, AND (b) max confidence is below
+        OOD_MAX_CONFIDENCE_CUTOFF, AND (c) at least OOD_MIN_CORE_CONCEPTS
+        core-type concepts exist in the article.
+
+        Returns (triggered, audit_fields).
+        """
+        assignments = llm_result.get("assignments", []) or []
+        confidences = [float(a.get("confidence", 0) or 0) for a in assignments]
+        max_conf = max(confidences) if confidences else 0.0
+        member_count = sum(1 for c in confidences if c >= self.member_threshold)
+        core_count = sum(
+            1 for c in concepts
+            if c.get("concept_type", "") in {
+                "Problem", "Solution", "Architecture", "Topic", "Mechanism",
+            }
+        )
+
+        triggered = (
+            member_count == 0
+            and max_conf < self.ood_max_confidence_cutoff
+            and core_count >= self.ood_min_core_concepts
+        )
+
+        audit = {
+            "article_level_ood": triggered,
+            "max_confidence": max_conf,
+            "member_count": member_count,
+            "core_concept_count": core_count,
+            "ood_max_confidence_cutoff": self.ood_max_confidence_cutoff,
+        }
+        return triggered, audit
 
     def _apply_classification(
         self,
@@ -354,35 +447,77 @@ class AutoThemeProposer:
             else:
                 orphans.append({"entry_id": entry_id, "confidence": confidence, "reason": reason})
 
-        # New theme candidate?
-        new_candidate = None
-        orphan_ratio = len(orphans) / max(len(assignments_raw), 1)
-        core_orphans = [o for o in orphans if self._is_core_concept_type(o["entry_id"], concepts)]
+        # Decision metric refinement (v3 OOD fix, 2026-04-23):
+        # The old orphan_ratio treated candidate-role attachments as
+        # "classified," so all-candidate OOD runs produced ratio=0 and
+        # never reached the 0.6 new-theme gate. Redefine: when zero
+        # member-role attachments land, count the candidate-role rows
+        # as effective orphans for the gate (the attaches themselves
+        # still stand — we keep the weak signal, we just don't let it
+        # hide the OOD).
+        # Dual-membership note (v3 effective_orphans):
+        # When member_count == 0, the candidate-role rows below will end up
+        # attached both to their original existing-theme (role="candidate",
+        # already written via attach_concepts in the loop above) AND to the
+        # newly-proposed theme via _propose_new_theme_candidate (role="member").
+        # This is intentional — the weak existing-theme link is kept as an
+        # audit trail of what the LLM considered; the new theme is the
+        # concept's actual home. Task 3's article-level OOD pre-gate provides
+        # the cleaner path (no existing-theme attach at all) for whole-article
+        # OOD cases. Here we're handling partial OOD after attach has already
+        # committed.
+        member_count = sum(1 for r in result_assignments if r["role"] == "member")
+        candidate_rows = [r for r in result_assignments if r["role"] == "candidate"]
+        candidate_count = len(candidate_rows)
 
+        if member_count == 0:
+            effective_orphans = orphans + [
+                {"entry_id": r["entry_id"], "confidence": r["confidence"],
+                 "reason": "unmembered_candidate_" + (r.get("reason") or "")}
+                for r in candidate_rows
+            ]
+        else:
+            effective_orphans = orphans
+
+        effective_orphan_count = len(effective_orphans)
+        orphan_ratio = effective_orphan_count / max(len(assignments_raw), 1)
+        core_orphans = [
+            o for o in effective_orphans
+            if self._is_core_concept_type(o["entry_id"], concepts)
+        ]
+
+        new_candidate = None
         if (
             orphan_ratio >= self.orphan_ratio_for_new_theme
             and len(core_orphans) >= self.min_core_orphans_for_new_theme
         ):
             new_candidate = self._propose_new_theme_candidate(
-                orphans, concepts, run_id, article_title
+                effective_orphans, concepts, run_id, article_title
             )
 
         action = "classified"
         if new_candidate:
             action = "classified_with_new_candidate"
 
-        # Set legacy compat fields
         first_theme = result_assignments[0] if result_assignments else None
 
         return AutoThemeResult(
             action=action,
             assignments=result_assignments,
             new_candidate_theme=new_candidate,
-            orphan_count=len(orphans),
-            reason=f"{len(result_assignments)} assigned, {len(orphans)} orphans",
+            orphan_count=len(orphans),  # real orphans (backward-compat)
+            reason=f"{len(result_assignments)} assigned, {len(orphans)} orphans, "
+                   f"{effective_orphan_count} effective",
             theme_id=new_candidate["theme_id"] if new_candidate else (first_theme["theme_id"] if first_theme else None),
             theme_name=new_candidate["name"] if new_candidate else None,
             attached_concept_ids=all_attached_ids,
+            audit={
+                "member_count": member_count,
+                "candidate_count": candidate_count,
+                "effective_orphan_count": effective_orphan_count,
+                "orphan_ratio": orphan_ratio,
+                "core_orphan_count": len(core_orphans),
+            },
         )
 
     def _is_core_concept_type(self, entry_id: str, concepts: list[dict]) -> bool:
