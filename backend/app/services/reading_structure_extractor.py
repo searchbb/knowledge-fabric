@@ -188,6 +188,7 @@ class ReadingStructureExtractor:
             fallback_title=project_name,
             document_text=document_text,
             graph_data=graph_data or {},
+            domain=domain,
         )
         self.last_result_meta = {
             "status": "generated",
@@ -330,6 +331,7 @@ class ReadingStructureExtractor:
         fallback_title: str,
         document_text: str,
         graph_data: Dict[str, Any],
+        domain: str = "tech",
     ) -> Dict[str, Any]:
         title = self._clean_text(raw.get("title")) or fallback_title
         summary = self._clean_text(raw.get("summary"))
@@ -343,13 +345,22 @@ class ReadingStructureExtractor:
                 if cleaned:
                     article_sections.append(cleaned)
 
+        # Methodology domain uses different fallback labels for the second
+        # and third backbone stages (solution=核心方法, architecture=论证路径).
+        if domain == "methodology":
+            solution_fallback = "核心方法"
+            architecture_fallback = "论证路径"
+        else:
+            solution_fallback = "核心方案"
+            architecture_fallback = "结构路径"
+
         result = {
             "title": title,
             "summary": summary,
             "problem": self._normalize_stage(raw.get("problem"), "核心问题"),
-            "solution": self._normalize_stage(raw.get("solution"), "核心方案"),
-            "architecture": self._normalize_stage(raw.get("architecture"), "结构路径"),
-            "group_titles": self._normalize_group_titles(raw.get("group_titles")),
+            "solution": self._normalize_stage(raw.get("solution"), solution_fallback),
+            "architecture": self._normalize_stage(raw.get("architecture"), architecture_fallback),
+            "group_titles": self._normalize_group_titles(raw.get("group_titles"), domain=domain),
             "article_sections": article_sections,
             "node_order_hints": self._build_node_order_hints(document_text, graph_data),
         }
@@ -363,22 +374,31 @@ class ReadingStructureExtractor:
             "summary": self._clean_text(value.get("summary")),
         }
 
-    def _normalize_group_titles(self, value: Any) -> Dict[str, str]:
-        titles = dict(DEFAULT_GROUP_TITLES)
+    def _normalize_group_titles(self, value: Any, *, domain: str = "tech") -> Dict[str, str]:
+        """Domain-scoped group_titles: base set is domain-specific, no
+        cross-domain leakage. Tech ontology never exports Step/Antipattern;
+        methodology never exports Layer/Technology/Mechanism."""
+        base = dict(GROUP_TITLES_BY_DOMAIN.get(domain, DEFAULT_GROUP_TITLES))
+        titles = dict(base)
         if isinstance(value, dict):
-            # Accept any keys from DEFAULT_GROUP_TITLES, plus any extra keys LLM provides
-            for key, default in DEFAULT_GROUP_TITLES.items():
+            # Accept LLM's override for the known keys
+            for key, default in base.items():
                 cleaned = self._clean_text(value.get(key))
                 if cleaned:
                     titles[key] = cleaned
                 else:
                     titles[key] = default
-            # Also accept LLM-provided keys not in defaults (forward compatibility)
+            # Tolerate LLM adding keys that belong to the current domain only
             for key, val in value.items():
-                if key not in titles:
+                if key in titles:
+                    continue
+                # Only accept extra keys that exist in the domain's allowed set
+                if key in base:
                     cleaned = self._clean_text(val)
                     if cleaned:
                         titles[key] = cleaned
+                # Keys from other domains (e.g., Layer/Technology for methodology)
+                # are silently dropped.
         return titles
 
     def _clean_text(self, value: Any) -> str:
