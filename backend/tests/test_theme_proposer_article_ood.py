@@ -161,3 +161,82 @@ def test_any_member_confidence_prevents_ood_gate():
         )
 
     assert result.audit["article_level_ood"] is False
+
+
+def test_article_level_ood_new_candidate_uses_effective_project_domain():
+    """Regression: process(project_domain=...) must carry that domain into
+    new candidate creation, not fall back to the proposer's constructor default.
+    """
+    proposer = AutoThemeProposer(project_domain="tech")
+
+    concepts_payload = [
+        {"entry_id": f"e{i}", "canonical_name": f"n-{i}", "concept_type": "Principle"}
+        for i in range(5)
+    ]
+    fake_entries = [
+        {
+            "entry_id": c["entry_id"],
+            "canonical_name": c["canonical_name"],
+            "concept_type": c["concept_type"],
+        }
+        for c in concepts_payload
+    ]
+    llm_assignments = [
+        {
+            "entry_id": f"e{i}",
+            "attach_to_theme_id": "t1",
+            "confidence": 0.6,
+            "reason": "weak",
+        }
+        for i in range(5)
+    ]
+    created_domains: list[str | None] = []
+
+    class FakeLLM:
+        def chat_json(self, **kwargs):
+            return {
+                "name": "方法论新主题",
+                "description": "desc",
+                "keywords": ["k"],
+            }
+
+    def _capture_create_theme(**kwargs):
+        created_domains.append(kwargs.get("domain"))
+        return {"theme_id": "t_new", "name": kwargs["name"]}
+
+    with patch(
+        "app.services.auto.theme_proposer.themes.list_themes",
+        side_effect=lambda *, status=None, **kw: [_fake_theme("t1")] if status in (None, "active") else [],
+    ), patch(
+        "app.services.auto.theme_proposer.registry.list_entries",
+        return_value=fake_entries,
+    ), patch.object(
+        AutoThemeProposer,
+        "_classify_via_llm",
+        return_value={"assignments": llm_assignments},
+    ), patch(
+        "app.services.auto.theme_proposer.get_pipeline_llm_params",
+        return_value={
+            "api_key": "sk-test",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "model": "qwen3.5-plus",
+        },
+    ), patch(
+        "app.services.auto.theme_proposer.LLMClient",
+        return_value=FakeLLM(),
+    ), patch(
+        "app.services.auto.theme_proposer.themes.create_theme",
+        side_effect=_capture_create_theme,
+    ), patch(
+        "app.services.auto.theme_proposer.themes.attach_concepts",
+        return_value=None,
+    ):
+        result = proposer.process(
+            project_id="p",
+            new_canonical_ids=[c["entry_id"] for c in concepts_payload],
+            run_id="r",
+            project_domain="methodology",
+        )
+
+    assert result.new_candidate_theme["theme_id"] == "t_new"
+    assert created_domains == ["methodology"]

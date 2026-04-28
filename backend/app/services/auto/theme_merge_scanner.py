@@ -265,8 +265,8 @@ def _adjudicate_via_llm(
 ) -> dict:
     """Ask LLM: MERGE / KEEP_SEPARATE / UNCERTAIN for a borderline pair.
 
-    Uses the static LLMClient (DeepSeek — Bailian is too slow on these tiny
-    prompts per earlier E2E data; see llm_client.py comment).
+    Uses the default LLMClient; Config now backs that with Bailian unless the
+    caller passes an explicit override.
     """
     from ...utils.llm_client import LLMClient
 

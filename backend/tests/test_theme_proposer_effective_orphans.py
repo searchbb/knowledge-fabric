@@ -44,7 +44,7 @@ def test_all_candidate_run_with_zero_members_triggers_new_theme():
     ]
 
     propose_calls: list = []
-    def _capture_propose(orphans, concepts, run_id, article_title):
+    def _capture_propose(orphans, concepts, run_id, article_title, **kwargs):
         propose_calls.append({"orphan_count": len(orphans)})
         return {"theme_id": "t_new", "name": "New", "attached_count": len(orphans)}
 
@@ -277,7 +277,7 @@ def test_effective_orphan_path_triggers_new_theme_when_ood_gate_skips():
     ]
 
     propose_calls: list = []
-    def _capture_propose(orphans, concepts, run_id, article_title):
+    def _capture_propose(orphans, concepts, run_id, article_title, **kwargs):
         propose_calls.append({"orphan_count": len(orphans)})
         return {"theme_id": "t_new", "name": "New", "attached_count": len(orphans)}
 

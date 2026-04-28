@@ -124,7 +124,7 @@ def create_global_theme():
     if not name:
         return jsonify({"success": False, "error": "name 不能为空"}), 400
 
-    domain = body.get("domain") or None
+    domain = body.get("domain") or "tech"
     try:
         theme = create_theme(
             name=name,

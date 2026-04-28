@@ -7,6 +7,7 @@ from app.utils.llm_client import (
     build_structured_json_response_format,
     is_local_openai_compatible_base_url,
 )
+from app.config import Config
 from app.utils.upstream_errors import (
     UpstreamErrorKind,
     classify_upstream_error,
@@ -92,6 +93,22 @@ def test_llm_client_chat_passes_timeout_to_openai_create():
 
     assert client.chat([{"role": "user", "content": "hello"}]) == "ok"
     assert captured_kwargs["timeout"] == 123
+
+
+def test_llm_client_default_config_prefers_bailian(monkeypatch):
+    monkeypatch.setattr(Config, "LLM_API_KEY", "sk-bailian")
+    monkeypatch.setattr(
+        Config,
+        "LLM_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    monkeypatch.setattr(Config, "LLM_MODEL_NAME", "qwen3.5-plus")
+
+    client = LLMClient()
+
+    assert client.api_key == "sk-bailian"
+    assert "dashscope.aliyuncs.com" in client.base_url
+    assert client.model == "qwen3.5-plus"
 
 
 def test_llm_client_chat_raises_after_retryable_errors_are_exhausted(monkeypatch):

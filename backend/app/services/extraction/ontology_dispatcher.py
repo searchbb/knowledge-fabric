@@ -21,16 +21,16 @@ from ..domain_classifier import DomainClassifier
 AUTO_FALLBACK_CONFIDENCE_THRESHOLD = 0.65
 
 
-def get_ontology_generator(domain: str):
+def get_ontology_generator(domain: str, *, llm_client=None):
     """Return an ontology generator instance for the given domain.
 
     `domain` must be 'tech' or 'methodology' — for 'auto', call
     resolve_project_domain() first to get a concrete value.
     """
     if domain == "tech":
-        return OntologyGenerator()
+        return OntologyGenerator(llm_client=llm_client)
     if domain == "methodology":
-        return MethodologyOntologyGenerator()
+        return MethodologyOntologyGenerator(llm_client=llm_client)
     if domain == "auto":
         raise ValueError(
             "get_ontology_generator cannot handle 'auto' directly; "
@@ -40,7 +40,7 @@ def get_ontology_generator(domain: str):
 
 
 def resolve_project_domain(
-    project: dict, article_text: Optional[str] = None
+    project: dict, article_text: Optional[str] = None, *, llm_client=None
 ) -> str:
     """Resolve project.domain to a concrete 'tech' or 'methodology'.
 
@@ -59,7 +59,7 @@ def resolve_project_domain(
     if domain == "auto":
         if article_text is None:
             return "tech"
-        result = DomainClassifier().classify(title="", text=article_text)
+        result = DomainClassifier(llm_client=llm_client).classify(title="", text=article_text)
         confidence = float(result.get("confidence", 0) or 0)
         primary = result.get("primary", "tech")
         if primary in {"tech", "methodology"} and confidence >= AUTO_FALLBACK_CONFIDENCE_THRESHOLD:

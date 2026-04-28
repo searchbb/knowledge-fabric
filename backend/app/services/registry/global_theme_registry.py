@@ -305,15 +305,22 @@ def attach_concepts(
     now = datetime.now().isoformat()
 
     newly_added = []
+    updated_existing = False
     for cid in concept_entry_ids:
         if cid in existing_ids:
             # Update existing membership
             for m in theme["concept_memberships"]:
                 if m["entry_id"] == cid:
-                    m["role"] = role
-                    m["score"] = score
-                    m["source"] = source
-                    m["assigned_at"] = now
+                    if (
+                        m.get("role") != role
+                        or m.get("score") != score
+                        or m.get("source") != source
+                    ):
+                        m["role"] = role
+                        m["score"] = score
+                        m["source"] = source
+                        m["assigned_at"] = now
+                        updated_existing = True
                     break
         else:
             theme["concept_memberships"].append({
@@ -325,7 +332,7 @@ def attach_concepts(
             })
             newly_added.append(cid)
 
-    if not newly_added and not concept_entry_ids:
+    if not newly_added and not updated_existing:
         theme["concept_entry_ids"] = _compat_entry_ids(theme)
         return theme
 
@@ -367,12 +374,17 @@ def detach_concepts(
         raise GlobalThemeNotFoundError(f"全局主题不存在: {theme_id}")
 
     remove_set = set(concept_entry_ids)
-    before_count = len(theme.get("concept_memberships", []))
+    before_memberships = list(theme.get("concept_memberships", []))
+    removed_ids = [
+        m["entry_id"]
+        for m in before_memberships
+        if m["entry_id"] in remove_set
+    ]
     theme["concept_memberships"] = [
-        m for m in theme.get("concept_memberships", [])
+        m for m in before_memberships
         if m["entry_id"] not in remove_set
     ]
-    actually_removed = before_count - len(theme["concept_memberships"])
+    actually_removed = len(removed_ids)
 
     if actually_removed == 0:
         theme["concept_entry_ids"] = _compat_entry_ids(theme)
@@ -388,7 +400,7 @@ def detach_concepts(
         entity_type="global_theme",
         entity_id=theme_id,
         entity_name=theme.get("name", ""),
-        details={"concept_entry_ids": list(remove_set), "removed_count": actually_removed},
+        details={"concept_entry_ids": removed_ids, "removed_count": actually_removed},
         actor_type=actor_type, actor_id=actor_id, run_id=run_id, source=source,
     )
 
@@ -812,6 +824,15 @@ def link_project_cluster(
     })
     theme["updated_at"] = datetime.now().isoformat()
     _save_themes(store)
+    from .evolution_log import emit_event
+    emit_event(
+        event_type="cluster_linked",
+        entity_type="global_theme",
+        entity_id=theme_id,
+        entity_name=theme.get("name", ""),
+        project_id=project_id,
+        details={"cluster_id": cluster_id, "cluster_name": cluster_name},
+    )
     theme["concept_entry_ids"] = _compat_entry_ids(theme)
     return theme
 
@@ -823,12 +844,25 @@ def unlink_project_cluster(
     theme = store["themes"].get(theme_id)
     if not theme:
         raise GlobalThemeNotFoundError(f"全局主题不存在: {theme_id}")
+    before_links = list(theme.get("source_project_clusters", []))
     theme["source_project_clusters"] = [
-        l for l in theme.get("source_project_clusters", [])
+        l for l in before_links
         if not (l["project_id"] == project_id and l["cluster_id"] == cluster_id)
     ]
+    if len(theme["source_project_clusters"]) == len(before_links):
+        theme["concept_entry_ids"] = _compat_entry_ids(theme)
+        return theme
     theme["updated_at"] = datetime.now().isoformat()
     _save_themes(store)
+    from .evolution_log import emit_event
+    emit_event(
+        event_type="cluster_unlinked",
+        entity_type="global_theme",
+        entity_id=theme_id,
+        entity_name=theme.get("name", ""),
+        project_id=project_id,
+        details={"cluster_id": cluster_id},
+    )
     theme["concept_entry_ids"] = _compat_entry_ids(theme)
     return theme
 

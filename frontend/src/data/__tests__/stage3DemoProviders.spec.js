@@ -94,7 +94,7 @@ describe('demo pipeline provider', () => {
 
   it('getLlmMode returns config snapshot', async () => {
     const res = await demoPipeline.getLlmMode()
-    expect(['local', 'online']).toContain(res.data.mode)
+    expect(['local', 'bailian']).toContain(res.data.mode)
     expect(res.data.local_model).toBeTruthy()
   })
 })

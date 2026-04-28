@@ -294,6 +294,21 @@ def generate_ontology():
         from ..services.extraction.ontology_dispatcher import (
             get_ontology_generator, resolve_project_domain,
         )
+        from ..services.llm_mode_service import get_pipeline_llm_params
+        from ..utils.llm_client import LLMClient
+
+        llm_params = get_pipeline_llm_params()
+        ontology_llm_client = LLMClient(
+            api_key=llm_params["api_key"],
+            base_url=llm_params["base_url"],
+            model=llm_params["model"],
+        )
+        logger.info(
+            "本体生成使用 LLM provider=%s mode=%s model=%s",
+            llm_params.get("provider"),
+            llm_params.get("mode"),
+            llm_params.get("model"),
+        )
 
         # Resolve 'auto' to a concrete domain. Use the first document text
         # as the classifier input when available.
@@ -303,8 +318,12 @@ def generate_ontology():
         resolved_domain = resolve_project_domain(
             project.to_dict(),
             article_text=article_text_for_classifier or None,
+            llm_client=ontology_llm_client,
         )
-        generator = get_ontology_generator(resolved_domain)
+        generator = get_ontology_generator(
+            resolved_domain,
+            llm_client=ontology_llm_client,
+        )
 
         # Interface compatibility: tech OntologyGenerator has
         # simulation_requirement as required positional; methodology has
@@ -338,6 +357,9 @@ def generate_ontology():
         if project.ontology_metadata is None:
             project.ontology_metadata = {}
         project.ontology_metadata["resolved_domain"] = resolved_domain
+        project.ontology_metadata["llm_mode"] = llm_params.get("mode")
+        project.ontology_metadata["llm_provider"] = llm_params.get("provider")
+        project.ontology_metadata["llm_model"] = llm_params.get("model")
         project.analysis_summary = ontology.get("analysis_summary", "")
         project.status = ProjectStatus.ONTOLOGY_GENERATED
         ProjectManager.save_project(project)
@@ -355,8 +377,10 @@ def generate_ontology():
                 "total_text_length": project.total_text_length
             }
         })
-        
+
     except Exception as e:
+        logger.error(f"本体生成失败: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
             "error": str(e),
@@ -579,11 +603,9 @@ def build_graph():
                     progress=18
                 )
                 # Read batch_size from the currently-active LLM mode snapshot.
-                # Local mode → Config.GRAPHITI_BATCH_SIZE
-                # Online DeepSeek → Config.DEEPSEEK_BATCH_SIZE (can be higher
-                # because DeepSeek has generous concurrency; graphiti batches
-                # serialize across batches, so bigger batch = shorter wall
-                # clock for long articles).
+                # local → Config.GRAPHITI_BATCH_SIZE; bailian →
+                # Config.BAILIAN_BATCH_SIZE. Graphiti batches serialize across
+                # batches, so the provider-specific snapshot owns this tuning.
                 try:
                     from ..services.llm_mode_service import get_graphiti_llm_params
                     _active_params = get_graphiti_llm_params()
@@ -1025,8 +1047,10 @@ def build_graph():
                 "message": "图谱构建任务已启动，请通过 /task/{task_id} 查询进度"
             }
         })
-        
+
     except Exception as e:
+        logger.error(f"构建图谱接口异常: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
             "error": str(e),
@@ -1133,8 +1157,10 @@ def get_graph_data(graph_id: str):
             "data": graph_data,
             "backend": backend,
         })
-        
+
     except Exception as e:
+        logger.error(f"获取图谱数据失败 graph_id={graph_id} backend={backend}: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
             "error": str(e),
@@ -1163,8 +1189,10 @@ def delete_graph(graph_id: str):
             "message": f"图谱已删除: {graph_id}",
             "backend": backend,
         })
-        
+
     except Exception as e:
+        logger.error(f"删除图谱失败 graph_id={graph_id} backend={backend}: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
             "error": str(e),

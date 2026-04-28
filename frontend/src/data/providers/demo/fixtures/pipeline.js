@@ -96,12 +96,12 @@ export const graphTasksFixture = {
 export const llmModeFixture = {
   success: true,
   data: {
-    mode: 'local',
+    mode: 'bailian',
     local_model: 'demo-local-llm',
     local_semaphore: 4,
-    deepseek_model: 'deepseek-chat',
-    deepseek_semaphore: 8,
-    deepseek_configured: false,
+    bailian_model: 'qwen3.5-plus',
+    bailian_semaphore: 6,
+    bailian_configured: true,
     updated_at: '2026-04-12T07:00:00Z',
     in_flight_count: 1,
   },

@@ -90,6 +90,9 @@ class MethodologyOntologyGenerator:
     can pick between them transparently.
     """
 
+    def __init__(self, llm_client=None):
+        self.llm_client = llm_client
+
     def generate(
         self,
         *,
@@ -98,7 +101,7 @@ class MethodologyOntologyGenerator:
         additional_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         from ..utils.llm_client import LLMClient
-        llm = LLMClient()
+        llm = self.llm_client or LLMClient()
 
         joined_text = "\n\n---\n\n".join(document_texts[:3])[:12000]
         user_prompt = (

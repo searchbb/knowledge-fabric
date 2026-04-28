@@ -35,10 +35,10 @@ def tmp_mode_file(monkeypatch, tmp_path):
 # ----- VALID_MODES lock ---------------------------------------------
 
 
-def test_valid_modes_includes_all_three():
+def test_valid_modes_matches_product_modes():
     """Regression: any change here needs an explicit test update so we
-    don't accidentally drop bailian (or one of the others)."""
-    assert VALID_MODES == ('local', 'online', 'bailian')
+    don't accidentally drop bailian or re-expose a retired provider."""
+    assert VALID_MODES == ('local', 'bailian')
 
 
 # ----- set_llm_mode -------------------------------------------------
@@ -47,13 +47,6 @@ def test_valid_modes_includes_all_three():
 def test_set_mode_rejects_unknown(tmp_mode_file):
     with pytest.raises(ValueError):
         set_llm_mode("gibberish")
-
-
-def test_set_mode_online_requires_deepseek_key(tmp_mode_file, monkeypatch):
-    from app.config import Config
-    monkeypatch.setattr(Config, "DEEPSEEK_API_KEY", None)
-    with pytest.raises(ValueError, match="DEEPSEEK_API_KEY"):
-        set_llm_mode("online")
 
 
 def test_set_mode_bailian_requires_bailian_key(tmp_mode_file, monkeypatch):
@@ -66,7 +59,6 @@ def test_set_mode_bailian_requires_bailian_key(tmp_mode_file, monkeypatch):
 def test_set_mode_local_never_requires_key(tmp_mode_file, monkeypatch):
     """local mode has no provider-key guard — it's the safe fallback."""
     from app.config import Config
-    monkeypatch.setattr(Config, "DEEPSEEK_API_KEY", None)
     monkeypatch.setattr(Config, "BAILIAN_API_KEY", None)
     payload = set_llm_mode("local")
     assert payload["mode"] == "local"
@@ -108,23 +100,6 @@ def test_params_local_returns_qwen3_local_provider(tmp_mode_file, monkeypatch):
     assert params["mode"] == "local"
     assert params["provider"] == "qwen3_local"
     assert params["use_qwen3_no_think"] is True
-
-
-def test_params_online_returns_deepseek_provider(tmp_mode_file, monkeypatch):
-    from app.config import Config
-    monkeypatch.setattr(Config, "DEEPSEEK_API_KEY", "sk-deepseek-test")
-    monkeypatch.setattr(Config, "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-    monkeypatch.setattr(Config, "DEEPSEEK_MODEL_NAME", "deepseek-chat")
-    monkeypatch.setattr(Config, "DEEPSEEK_SEMAPHORE_LIMIT", 6)
-    monkeypatch.setattr(Config, "DEEPSEEK_BATCH_SIZE", 1)
-    set_llm_mode("online")
-
-    params = get_graphiti_llm_params()
-    assert params["mode"] == "online"
-    assert params["provider"] == "deepseek"
-    assert params["api_key"] == "sk-deepseek-test"
-    assert params["model"] == "deepseek-chat"
-    assert params["use_qwen3_no_think"] is False
 
 
 def test_params_bailian_returns_bailian_provider(tmp_mode_file, monkeypatch):

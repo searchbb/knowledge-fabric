@@ -48,6 +48,9 @@ class DomainClassifier:
 
     MAX_BODY_CHARS = 2000
 
+    def __init__(self, llm_client: LLMClient | None = None):
+        self.llm_client = llm_client
+
     def classify(self, *, title: str, text: str) -> Dict[str, Any]:
         """Classify the article. Returns the 5-field result dict.
 
@@ -57,7 +60,7 @@ class DomainClassifier:
         - Unknown primary value → coerce to tech with confidence=0.0.
         """
         try:
-            llm = LLMClient()
+            llm = self.llm_client or LLMClient()
             body = (text or "")[: self.MAX_BODY_CHARS]
             user_msg = (
                 f"文章标题：{title or '(无)'}\n\n"

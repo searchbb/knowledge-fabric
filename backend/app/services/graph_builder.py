@@ -1195,6 +1195,13 @@ class GraphBuilderService:
         params = get_graphiti_llm_params()
         snapshot = (params['provider'], params['base_url'], params['model'])
 
+        if self._client is not None and not hasattr(self, '_client_snapshot'):
+            # Tests and a few diagnostic callers inject lightweight fake
+            # clients directly. Those objects are already the desired client;
+            # do not replace them with a live Graphiti instance just because
+            # the runtime mode snapshot exists.
+            return self._client
+
         if self._client is not None and getattr(self, '_client_snapshot', None) != snapshot:
             # 模式发生过切换：把旧 client 扔掉（对象 GC 后 OpenAI 连接池会自己关）。
             logger.info(

@@ -255,10 +255,11 @@ cp .env.example .env
 Edit `.env` — a minimum viable configuration:
 
 ```env
-# LLM (OpenAI-compatible; any compatible gateway works)
-LLM_API_KEY=sk-xxxxxxxx
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL_NAME=gpt-4o-mini
+# Bailian (DashScope OpenAI-compatible)
+BAILIAN_API_KEY=sk-xxxxxxxx
+BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+BAILIAN_MODEL_NAME=qwen3.5-plus
+LLM_MODE_DEFAULT=bailian
 
 # Neo4j
 NEO4J_URI=bolt://localhost:7687
@@ -353,7 +354,7 @@ uv run pytest -q
 | Backend `ModuleNotFoundError: graphiti_core` | Python deps not installed | Make sure `uv sync` ran; start the backend with `uv run python run.py` (or activate `backend/.venv`) — not the system `python3` |
 | Backend `ServiceUnavailable` from Neo4j | Neo4j not running or password mismatch | `docker ps \| grep neo4j`; if needed `docker logs knowledge-fabric-neo4j` |
 | Reading-view screenshot `ERR_CONNECTION_REFUSED` | Frontend not on port 3000, or playwright browser missing | Make sure `npm run frontend` is up; run `cd backend && uv run playwright install chromium` |
-| LLM 401 / 404 | `LLM_BASE_URL` / `LLM_MODEL_NAME` mismatched with key | Reconcile with your gateway's docs; OpenAI official is `https://api.openai.com/v1` + `gpt-4o-mini` |
+| LLM 401 / 404 | Bailian key, base URL, or model mismatch | Check `BAILIAN_API_KEY`, `BAILIAN_BASE_URL`, and `BAILIAN_MODEL_NAME`; default base URL is `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 
 ## Known limitations
 

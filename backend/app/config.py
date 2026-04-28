@@ -27,10 +27,28 @@ class Config:
     # JSON配置 - 禁用ASCII转义，让中文直接显示（而不是 \uXXXX 格式）
     JSON_AS_ASCII = False
     
-    # LLM配置（统一使用OpenAI格式）
-    LLM_API_KEY = os.environ.get('LLM_API_KEY')
-    LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
-    LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
+    # Bailian (Alibaba DashScope, OpenAI-compatible). qwen3.5-plus is the
+    # current default online model for article extraction and utility LLM calls.
+    BAILIAN_API_KEY = os.environ.get('BAILIAN_API_KEY')
+    BAILIAN_BASE_URL = os.environ.get(
+        'BAILIAN_BASE_URL',
+        'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    )
+    BAILIAN_MODEL_NAME = os.environ.get('BAILIAN_MODEL_NAME', 'qwen3.5-plus')
+    BAILIAN_SEMAPHORE_LIMIT = int(os.environ.get('BAILIAN_SEMAPHORE_LIMIT', '6'))
+    BAILIAN_BATCH_SIZE = int(os.environ.get('BAILIAN_BATCH_SIZE', '1'))
+
+    # LLM配置（统一使用OpenAI格式）。通用 LLMClient 默认跟随百炼，避免旧
+    # LLM_* 环境变量残留把主题归属、摘要补齐等工具路径打回 DeepSeek。
+    LLM_API_KEY = BAILIAN_API_KEY or os.environ.get('LLM_API_KEY')
+    LLM_BASE_URL = BAILIAN_BASE_URL if BAILIAN_API_KEY else os.environ.get(
+        'LLM_BASE_URL',
+        BAILIAN_BASE_URL,
+    )
+    LLM_MODEL_NAME = BAILIAN_MODEL_NAME if BAILIAN_API_KEY else os.environ.get(
+        'LLM_MODEL_NAME',
+        BAILIAN_MODEL_NAME,
+    )
     LLM_TIMEOUT_SECONDS = int(os.environ.get('LLM_TIMEOUT_SECONDS', '180'))
     LLM_RESPONSE_FORMAT_MODE = os.environ.get('LLM_RESPONSE_FORMAT_MODE', 'auto').lower()
     GRAPHITI_LLM_API_KEY = os.environ.get('GRAPHITI_LLM_API_KEY') or LLM_API_KEY
@@ -61,33 +79,9 @@ class Config:
     GRAPHITI_SEMAPHORE_LIMIT = int(os.environ.get('GRAPHITI_SEMAPHORE_LIMIT', '3'))
     GRAPHITI_BATCH_SIZE = int(os.environ.get('GRAPHITI_BATCH_SIZE', '3'))
 
-    # ===== 抽取模式开关 (local vs online DeepSeek) =====
+    # ===== 抽取模式开关 (local vs bailian) =====
     # 默认启动模式；运行时通过 backend/data/llm_mode.json 可覆盖。
-    LLM_MODE_DEFAULT = os.environ.get('LLM_MODE_DEFAULT', 'local').strip().lower()
-
-    # DeepSeek 在线 API（GPT consult 2026-04-11: semaphore 6 起步、不要超过 8；
-    # deepseek-chat 非思考模式，比 deepseek-reasoner 更适合大量结构化抽取）。
-    DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
-    DEEPSEEK_BASE_URL = os.environ.get('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1')
-    DEEPSEEK_MODEL_NAME = os.environ.get('DEEPSEEK_MODEL_NAME', 'deepseek-chat')
-    DEEPSEEK_SEMAPHORE_LIMIT = int(os.environ.get('DEEPSEEK_SEMAPHORE_LIMIT', '6'))
-    DEEPSEEK_BATCH_SIZE = int(os.environ.get('DEEPSEEK_BATCH_SIZE', '1'))
-
-    # Bailian (Alibaba DashScope, OpenAI-compatible). qwen3.5-plus is the
-    # current recommended main model for Graphiti bulk extraction: the
-    # long-output tail is ~4-5x shorter than DeepSeek's on the same
-    # edge-extraction prompts (2026-04-15 A/B: 40+ min → 11 min for a 14KB
-    # Chinese article). Note: qwen3 models default to thinking=on on
-    # DashScope; graph_builder.py turns it off via extra_body when
-    # provider=='bailian', which matters for structured extraction latency.
-    BAILIAN_API_KEY = os.environ.get('BAILIAN_API_KEY')
-    BAILIAN_BASE_URL = os.environ.get(
-        'BAILIAN_BASE_URL',
-        'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    )
-    BAILIAN_MODEL_NAME = os.environ.get('BAILIAN_MODEL_NAME', 'qwen3.5-plus')
-    BAILIAN_SEMAPHORE_LIMIT = int(os.environ.get('BAILIAN_SEMAPHORE_LIMIT', '6'))
-    BAILIAN_BATCH_SIZE = int(os.environ.get('BAILIAN_BATCH_SIZE', '1'))
+    LLM_MODE_DEFAULT = os.environ.get('LLM_MODE_DEFAULT', 'bailian').strip().lower()
 
     # 文本处理配置
     DEFAULT_CHUNK_SIZE = int(os.environ.get('DEFAULT_CHUNK_SIZE', '3000'))
@@ -116,6 +110,8 @@ class Config:
     def validate(cls):
         """验证必要配置"""
         errors = []
+        if not cls.BAILIAN_API_KEY:
+            errors.append("BAILIAN_API_KEY 未配置")
         if not cls.LLM_API_KEY:
             errors.append("LLM_API_KEY 未配置")
         if not cls.GRAPHITI_LLM_API_KEY:

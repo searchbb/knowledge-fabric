@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from ..registry import global_theme_registry as themes
 from ..registry import global_concept_registry as registry
+from ..llm_mode_service import get_pipeline_llm_params
 from ...utils.llm_client import LLMClient
 
 logger = logging.getLogger("mirofish.auto_theme_proposer")
@@ -175,7 +176,9 @@ class AutoThemeProposer:
         # first-article cold start → propose candidate.
         if not classifiable_themes:
             audit["decision"] = "create_theme_cold_start"
-            result = self._handle_no_themes(concepts, run_id, article_title)
+            result = self._handle_no_themes(
+                concepts, run_id, article_title, project_domain=effective_domain
+            )
             result.audit = {**audit, **result.audit}
             return result
 
@@ -206,7 +209,7 @@ class AutoThemeProposer:
         # to new-theme proposal, so we don't pollute existing themes with
         # weak cross-domain links.
         ood_triggered, ood_audit = self._check_article_level_ood(
-            llm_result, concepts
+            llm_result, concepts, project_domain=effective_domain
         )
         audit.update(ood_audit)
 
@@ -218,7 +221,8 @@ class AutoThemeProposer:
                 for c in concepts
             ]
             new_candidate = self._propose_new_theme_candidate(
-                fake_orphans, concepts, run_id, article_title
+                fake_orphans, concepts, run_id, article_title,
+                project_domain=effective_domain,
             )
             return AutoThemeResult(
                 action="classified_with_new_candidate" if new_candidate else "noop",
@@ -233,7 +237,8 @@ class AutoThemeProposer:
             )
 
         result = self._apply_classification(
-            llm_result, concepts, classifiable_themes, run_id, article_title
+            llm_result, concepts, classifiable_themes, run_id, article_title,
+            project_domain=effective_domain,
         )
         # Preserve run-level audit without clobbering anything classification
         # downstream may have added.
@@ -259,7 +264,7 @@ class AutoThemeProposer:
         active_themes: list[dict],
         article_title: str = "",
     ) -> dict:
-        llm = LLMClient()
+        llm = self._pipeline_llm_client()
 
         themes_for_prompt = []
         for t in active_themes[:10]:
@@ -335,6 +340,15 @@ class AutoThemeProposer:
         result = llm.chat_json(messages=messages, temperature=0.2, max_tokens=4096)
         return result
 
+    def _pipeline_llm_client(self) -> LLMClient:
+        """Build the utility LLM client from the active pipeline mode."""
+        params = get_pipeline_llm_params()
+        return LLMClient(
+            api_key=params["api_key"],
+            base_url=params["base_url"],
+            model=params["model"],
+        )
+
     def _fallback_keyword_match(
         self, concepts: list[dict], active_themes: list[dict]
     ) -> Optional[dict]:
@@ -372,7 +386,11 @@ class AutoThemeProposer:
     #   positives).
 
     def _check_article_level_ood(
-        self, llm_result: dict, concepts: list[dict],
+        self,
+        llm_result: dict,
+        concepts: list[dict],
+        *,
+        project_domain: Optional[str] = None,
     ) -> tuple[bool, dict]:
         """Detect article-level out-of-domain.
 
@@ -388,7 +406,7 @@ class AutoThemeProposer:
         max_conf = max(confidences) if confidences else 0.0
         member_count = sum(1 for c in confidences if c >= self.member_threshold)
         ood_core_types = CORE_CONCEPT_TYPES_BY_DOMAIN.get(
-            self.project_domain,
+            project_domain or self.project_domain,
             CORE_CONCEPT_TYPES_BY_DOMAIN["tech"],
         )
         core_count = sum(
@@ -418,6 +436,7 @@ class AutoThemeProposer:
         active_themes: list[dict],
         run_id: str,
         article_title: str,
+        project_domain: Optional[str] = None,
     ) -> AutoThemeResult:
         assignments_raw = llm_result.get("assignments", [])
         theme_ids = {t["theme_id"] for t in active_themes}
@@ -502,7 +521,9 @@ class AutoThemeProposer:
         orphan_ratio = effective_orphan_count / max(len(assignments_raw), 1)
         core_orphans = [
             o for o in effective_orphans
-            if self._is_core_concept_type(o["entry_id"], concepts)
+            if self._is_core_concept_type(
+                o["entry_id"], concepts, project_domain=project_domain
+            )
         ]
 
         new_candidate = None
@@ -511,7 +532,8 @@ class AutoThemeProposer:
             and len(core_orphans) >= self.min_core_orphans_for_new_theme
         ):
             new_candidate = self._propose_new_theme_candidate(
-                effective_orphans, concepts, run_id, article_title
+                effective_orphans, concepts, run_id, article_title,
+                project_domain=project_domain,
             )
 
         action = "classified"
@@ -539,9 +561,15 @@ class AutoThemeProposer:
             },
         )
 
-    def _is_core_concept_type(self, entry_id: str, concepts: list[dict]) -> bool:
+    def _is_core_concept_type(
+        self,
+        entry_id: str,
+        concepts: list[dict],
+        *,
+        project_domain: Optional[str] = None,
+    ) -> bool:
         core_types = CORE_CONCEPT_TYPES_BY_DOMAIN.get(
-            self.project_domain,
+            project_domain or self.project_domain,
             CORE_CONCEPT_TYPES_BY_DOMAIN["tech"],  # fallback to tech if unknown domain
         )
         for c in concepts:
@@ -552,12 +580,13 @@ class AutoThemeProposer:
     def _propose_new_theme_candidate(
         self, orphans: list[dict], concepts: list[dict],
         run_id: str, article_title: str,
+        project_domain: Optional[str] = None,
     ) -> Optional[dict]:
         orphan_ids = {o["entry_id"] for o in orphans}
         orphan_concepts = [c for c in concepts if c["entry_id"] in orphan_ids]
 
         try:
-            llm = LLMClient()
+            llm = self._pipeline_llm_client()
 
             concept_list = "\n".join(
                 f"- [{c['concept_type']}] {c['canonical_name']}" for c in orphan_concepts
@@ -598,7 +627,7 @@ class AutoThemeProposer:
                 name=theme_name, description=theme_desc,
                 status="candidate", source="auto_candidate",
                 keywords=theme_keywords if isinstance(theme_keywords, list) else [],
-                domain=self.project_domain,
+                domain=project_domain or self.project_domain,
             )
 
             orphan_entry_ids = [o["entry_id"] for o in orphans]
@@ -627,10 +656,14 @@ class AutoThemeProposer:
             return None
 
     def _handle_no_themes(
-        self, concepts: list[dict], run_id: str, article_title: str,
+        self,
+        concepts: list[dict],
+        run_id: str,
+        article_title: str,
+        project_domain: Optional[str] = None,
     ) -> AutoThemeResult:
         core_types = CORE_CONCEPT_TYPES_BY_DOMAIN.get(
-            self.project_domain,
+            project_domain or self.project_domain,
             CORE_CONCEPT_TYPES_BY_DOMAIN["tech"],
         )
         core = [c for c in concepts if c.get("concept_type") in core_types]
@@ -638,6 +671,7 @@ class AutoThemeProposer:
             candidate = self._propose_new_theme_candidate(
                 [{"entry_id": c["entry_id"], "confidence": 0} for c in concepts],
                 concepts, run_id, article_title,
+                project_domain=project_domain,
             )
             return AutoThemeResult(
                 action="classified_with_new_candidate",

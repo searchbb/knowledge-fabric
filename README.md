@@ -255,10 +255,11 @@ cp .env.example .env
 编辑 `.env`，最小可运行配置：
 
 ```env
-# LLM（OpenAI 兼容；也可换成任意 OpenAI 兼容网关）
-LLM_API_KEY=sk-xxxxxxxx
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL_NAME=gpt-4o-mini
+# 百炼（DashScope OpenAI 兼容）
+BAILIAN_API_KEY=sk-xxxxxxxx
+BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+BAILIAN_MODEL_NAME=qwen3.5-plus
+LLM_MODE_DEFAULT=bailian
 
 # Neo4j
 NEO4J_URI=bolt://localhost:7687
@@ -362,7 +363,7 @@ cd backend && uv run pytest -q
 | 后端 `ModuleNotFoundError: graphiti_core` | Python 依赖未安装 | 确认 `uv sync` 已执行；启动用 `uv run python run.py` 或激活 `backend/.venv`，不要直接用系统 `python3` |
 | 后端连 Neo4j 报 `ServiceUnavailable` | Neo4j 未启动或口令不匹配 | `docker ps \| grep neo4j`；必要时 `docker logs knowledge-fabric-neo4j` |
 | 阅读视图截图 `ERR_CONNECTION_REFUSED` | 前端不在 3000 端口，或 playwright 浏览器未安装 | 确认 `npm run frontend` 已启动；执行 `cd backend && uv run playwright install chromium` |
-| LLM 401 / 404 | `LLM_BASE_URL` / `LLM_MODEL_NAME` 与 key 不匹配 | 按网关文档核对；OpenAI 官方为 `https://api.openai.com/v1` + `gpt-4o-mini` |
+| LLM 401 / 404 | 百炼 key、base URL 或 model 不匹配 | 核对 `BAILIAN_API_KEY`、`BAILIAN_BASE_URL` 和 `BAILIAN_MODEL_NAME`；默认 base URL 为 `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 
 ## 已知限制
 

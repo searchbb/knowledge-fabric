@@ -1,5 +1,5 @@
 """
-REST surface for the LLM 抽取模式开关 (local / online DeepSeek / bailian qwen3).
+REST surface for the LLM 抽取模式开关 (local / bailian qwen3).
 
 端点：
     GET  /api/config/llm-mode
@@ -7,11 +7,11 @@ REST surface for the LLM 抽取模式开关 (local / online DeepSeek / bailian q
          用于前端按钮 disable 的条件判断。
 
     PUT  /api/config/llm-mode
-         body: {"mode": "local"|"online"|"bailian"}
+         body: {"mode": "local"|"bailian"}
          - 如果有 in-flight URL, 直接 409 拒绝（GPT consult 2026-04-11:
            不热拔插 in-flight Graphiti client，避免把 OpenAI 连接池/Neo4j
            状态弄坏）
-         - 如果切到 online/bailian 但对应 provider 的 API_KEY 未配置, 400 拒绝
+         - 如果切到 bailian 但对应 provider 的 API_KEY 未配置, 400 拒绝
          - 切换成功返回新 payload；下一次 /api/auto/process-pending 会在
            graph_builder._get_client() 里 snapshot 到新模式并自动重建
            Graphiti client
@@ -50,10 +50,6 @@ def _payload_with_meta() -> dict:
         "updated_by": mode_payload.get("updated_by"),
         "valid_modes": list(VALID_MODES),
         "in_flight_count": in_flight_count,
-        "deepseek_configured": bool(Config.DEEPSEEK_API_KEY),
-        "deepseek_model": Config.DEEPSEEK_MODEL_NAME,
-        "deepseek_semaphore": Config.DEEPSEEK_SEMAPHORE_LIMIT,
-        "deepseek_base_url": Config.DEEPSEEK_BASE_URL,
         "bailian_configured": bool(Config.BAILIAN_API_KEY),
         "bailian_model": Config.BAILIAN_MODEL_NAME,
         "bailian_semaphore": Config.BAILIAN_SEMAPHORE_LIMIT,
@@ -78,7 +74,7 @@ def put_mode():
     拒绝条件：
     - in_flight > 0                → 409
     - mode 非法                    → 400
-    - mode=online 但 DEEPSEEK 缺失  → 400
+    - mode=bailian 但 BAILIAN 缺失  → 400
     """
     body = request.get_json(silent=True) or {}
     new_mode = str(body.get("mode", "")).strip().lower()
@@ -119,9 +115,7 @@ def put_mode():
         set_llm_mode(new_mode, updated_by="api")
     except ValueError as exc:
         msg = str(exc).lower()
-        if "deepseek" in msg:
-            error_code = "DEEPSEEK_NOT_CONFIGURED"
-        elif "bailian" in msg:
+        if "bailian" in msg:
             error_code = "BAILIAN_NOT_CONFIGURED"
         else:
             error_code = "INVALID_MODE"

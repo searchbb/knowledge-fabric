@@ -33,6 +33,20 @@ def is_local_openai_compatible_base_url(base_url: Optional[str]) -> bool:
     return host in {"127.0.0.1", "localhost", "0.0.0.0"}
 
 
+def is_bailian_qwen_base_url(base_url: Optional[str]) -> bool:
+    """Detect Alibaba DashScope's OpenAI-compatible endpoint."""
+    if not base_url:
+        return False
+
+    try:
+        parsed = urlparse(base_url)
+    except Exception:
+        return False
+
+    host = (parsed.hostname or "").strip().lower()
+    return host.endswith("dashscope.aliyuncs.com")
+
+
 def build_structured_json_response_format(
     base_url: Optional[str],
     response_model: Optional[type[BaseModel]] = None,
@@ -81,18 +95,9 @@ class LLMClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None
     ):
-        # NOTE (2026-04-16): Earlier this constructor auto-routed bare LLMClient()
-        # calls through llm_mode_service so every utility (ontology gen, theme
-        # proposer, quality_gate.backfill_summaries, reading-structure
-        # extraction) followed the auto-pipeline mode switch. That overshot the
-        # user's intent: 百炼 was approved as the *graph extraction* provider
-        # (Graphiti chunks), but Bailian's tail latency on the many-small
-        # backfill summary calls is ~10-50x worse than DeepSeek (one 50-node
-        # backfill batch took 16 min vs 21s on DeepSeek), which blew past the
-        # pipeline stall watchdog. We keep the explicit routing only where the
-        # user opted in (graph_builder uses get_graphiti_llm_params; the cross-
-        # concept discoverer's _llm_judge passes params explicitly). Everyone
-        # else stays on the static LLM_* env config.
+        # Bare utility calls now default to Config's Bailian-backed LLM_* values.
+        # Pipeline entry points that need the persisted local/bailian switch pass
+        # explicit params from llm_mode_service instead of relying on ambient env.
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
@@ -139,6 +144,15 @@ class LLMClient:
             if response_format.get("type") == "json_object":
                 normalized_response_format = build_structured_json_response_format(self.base_url)
             kwargs["response_format"] = normalized_response_format
+
+        if is_bailian_qwen_base_url(self.base_url) and "qwen" in (self.model or "").lower():
+            # DashScope qwen3 models default to thinking mode, which is costly
+            # for strict JSON utility calls such as ontology generation.
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {
+                    "enable_thinking": False,
+                }
+            }
         
         last_error = None
         for attempt in range(self.max_retries + 1):

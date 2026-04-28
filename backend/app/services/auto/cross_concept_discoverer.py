@@ -997,8 +997,8 @@ class CrossConceptDiscoverer:
         from ...utils.llm_client import LLMClient
         from ..llm_mode_service import get_graphiti_llm_params
 
-        # Route through the runtime mode switch (local / online DeepSeek /
-        # bailian) rather than the static LLM_* env vars — keeps discovery on
+        # Route through the runtime mode switch (local / bailian) rather than
+        # the static LLM_* env vars — keeps discovery on
         # the same provider as graph_builder so the user's "切换抽取模式" UI
         # actually owns this LLM call too. Snapshot once per chunk; do NOT
         # hold a reference (the mode may have changed by the next chunk).
