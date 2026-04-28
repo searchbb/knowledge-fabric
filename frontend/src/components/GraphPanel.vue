@@ -431,6 +431,7 @@ const TYPE_STATUS_LABEL_MAP = {
   matched: '命中当前本体',
   untyped: '未命中类型标签',
   unexpected: '超出当前本体',
+  projection: '阅读视图投影',
 }
 
 const KNOWN_TYPE_COLORS = {
@@ -579,6 +580,21 @@ const READING_GROUP_META = {
   },
 }
 
+const READING_SUMMARY_TYPES_BY_DOMAIN = {
+  tech: {
+    solution: 'Solution',
+    architecture: 'Architecture',
+  },
+  methodology: {
+    solution: 'Method',
+    architecture: 'ReasoningPath',
+  },
+}
+
+const getReadingSummaryType = (section) =>
+  (READING_SUMMARY_TYPES_BY_DOMAIN[props.domain] || READING_SUMMARY_TYPES_BY_DOMAIN.tech)[section] ||
+  READING_SUMMARY_TYPES_BY_DOMAIN.tech[section]
+
 const graphContainer = ref(null)
 const graphSvg = ref(null)
 const selectedItem = ref(null)
@@ -715,6 +731,11 @@ const toggleReadingGroup = (id) => {
 const getRawNodeLabels = (node) =>
   (node?.labels || []).filter(label => !DEFAULT_NODE_LABELS.has(label))
 
+const isSyntheticProjectionNode = (node) => {
+  const generatedBy = node?.attributes?.generated_by
+  return generatedBy === 'reading_structure' || generatedBy === 'reading_projection'
+}
+
 const getNodeTypeMeta = (node) => {
   const rawLabels = getRawNodeLabels(node)
   const schemaTypes = schemaEntityTypeSet.value
@@ -743,6 +764,16 @@ const getNodeTypeMeta = (node) => {
     }
 
     const unexpectedType = rawLabels[0]
+    if (isSyntheticProjectionNode(node)) {
+      return {
+        type: unexpectedType,
+        label: TYPE_LABEL_MAP[unexpectedType] || unexpectedType,
+        status: 'projection',
+        statusLabel: TYPE_STATUS_LABEL_MAP.projection,
+        rawLabels,
+      }
+    }
+
     return {
       type: unexpectedType,
       label: TYPE_LABEL_MAP[unexpectedType] || unexpectedType,
@@ -790,6 +821,9 @@ const getNodeSchemaHint = (item) => {
   }
   if (item.schemaStatus === 'unexpected') {
     return '该节点带有标签，但这个标签不在当前页面使用的本体定义中。'
+  }
+  if (item.schemaStatus === 'projection') {
+    return '这是阅读视图合成的导航节点，用于组织文章主线；不作为原始图谱本体类型校验。'
   }
   return '该节点已命中当前本体定义。'
 }
@@ -1404,7 +1438,7 @@ const buildReadingTreeData = (graphData, readingStructure = null) => {
     const solutionSummaryNode = createReadingSummaryNode(
       `reading-solution-${rootNode.id}`,
       readingStructure.solution.title,
-      'Solution',
+      getReadingSummaryType('solution'),
       readingStructure.solution.summary,
       {
         representative_node: primarySolution?.name || rootNode.name,
@@ -1418,7 +1452,7 @@ const buildReadingTreeData = (graphData, readingStructure = null) => {
     const architectureSummaryNode = createReadingSummaryNode(
       `reading-architecture-${rootNode.id}`,
       readingStructure.architecture.title,
-      props.domain === 'methodology' ? 'ReasoningPath' : 'Architecture',
+      getReadingSummaryType('architecture'),
       readingStructure.architecture.summary,
       {
         representative_node: primaryArchitecture?.name || primarySolution?.name || rootNode.name,
@@ -3130,6 +3164,12 @@ input:checked + .slider:before {
   border-color: #F1C8C8;
 }
 
+.schema-pill.status-projection {
+  color: #245C7A;
+  background: #EEF7FB;
+  border-color: #C9E3EF;
+}
+
 .section-title {
   font-size: 12px;
   font-weight: 600;
@@ -3208,6 +3248,12 @@ input:checked + .slider:before {
   color: #8A2D2D;
   background: #FFF4F4;
   border: 1px solid #F0D0D0;
+}
+
+.schema-hint.status-projection {
+  color: #245C7A;
+  background: #F2FAFD;
+  border: 1px solid #CFE8F2;
 }
 
 .labels-list {
