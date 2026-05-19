@@ -1,0 +1,69 @@
+{
+  "idempotency_key": "p3-huawei-agent-ready-external-pack-001",
+  "title": "Huawei Cloud Agent-ready external evidence pack",
+  "source_type": "deep_research",
+  "scope": "C2_external",
+  "producer": {
+    "kind": "codex_skill",
+    "name": "deep_research_skill",
+    "version": "0.1.0",
+    "model": "GPT Pro"
+  },
+  "topic": "华为云 Agent-ready 企业软件栈战略研究",
+  "summary": "围绕企业 Agent 落地中的治理、执行控制、工具化和行业资产沉淀收集外部证据。",
+  "source_refs": [
+    {
+      "source_id": "src_001",
+      "type": "url",
+      "title": "Agent governance source",
+      "url": "https://example.com/agent-governance",
+      "retrieved_at": "2026-04-28T00:00:00Z"
+    },
+    {
+      "source_id": "src_002",
+      "type": "url",
+      "title": "Agent inventory and lifecycle source",
+      "url": "https://example.com/agent-inventory",
+      "retrieved_at": "2026-04-28T00:00:00Z"
+    },
+    {
+      "source_id": "src_003",
+      "type": "url",
+      "title": "Industry asset reuse source",
+      "url": "https://example.com/industry-asset-reuse",
+      "retrieved_at": "2026-04-28T00:00:00Z"
+    }
+  ],
+  "evidence_candidates": [
+    {
+      "external_id": "agent_harness_control_001",
+      "claim": "企业级 Agent 的核心控制点不在 Agent 生成，而在业务动作执行前后的治理外壳。",
+      "evidence_text": "外部研究材料指出企业 Agent 需要身份、权限、审批、日志、监控和补救机制。",
+      "source_refs": ["src_001"],
+      "confidence": 0.86,
+      "tags": ["Harness", "Agent-ready", "治理"],
+      "degraded": false,
+      "degradation_reasons": []
+    },
+    {
+      "external_id": "agent_sprawl_002",
+      "claim": "Agent 数量增长会带来治理复杂度，企业需要 inventory、lifecycle 和 monitoring。",
+      "evidence_text": "外部资料强调大量 Agent 并存时，需要统一清单、生命周期管理与监控。",
+      "source_refs": ["src_002"],
+      "confidence": 0.8,
+      "tags": ["Agent治理", "风险", "平台化"],
+      "degraded": false,
+      "degradation_reasons": []
+    },
+    {
+      "external_id": "industry_asset_003",
+      "claim": "首客深交付的关键不是一次性项目，而是沉淀可复制的行业本体、流程、规则和测试资产。",
+      "evidence_text": "外部交付经验表明，行业资产复用决定第二客户复制效率。",
+      "source_refs": ["src_003"],
+      "confidence": 0.78,
+      "tags": ["行业资产", "复制", "首客"],
+      "degraded": false,
+      "degradation_reasons": []
+    }
+  ]
+}
