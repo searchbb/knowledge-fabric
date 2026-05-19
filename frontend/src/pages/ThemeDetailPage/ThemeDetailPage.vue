@@ -68,14 +68,22 @@
         <!-- Concept group nav -->
         <nav class="td-group-nav">
           <div class="td-group-nav-title">概念分组</div>
+          <button
+            v-if="hasSourceContext && currentSourceConcepts.length"
+            class="td-nav-item td-nav-item-source"
+            :class="{ active: scrollTarget === 'source' }"
+            @click="scrollTo('source')"
+          >
+            当前文章贡献 ({{ currentSourceConcepts.length }})
+          </button>
           <button class="td-nav-item" :class="{ active: scrollTarget === 'bridge' }" @click="scrollTo('bridge')">
-            桥接概念 ({{ panorama.grouped_concepts.bridge.length }})
+            桥接概念 ({{ displayGroupedConcepts.bridge.length }})
           </button>
           <button class="td-nav-item" :class="{ active: scrollTarget === 'core' }" @click="scrollTo('core')">
-            核心概念 ({{ panorama.grouped_concepts.core.length }})
+            核心概念 ({{ displayGroupedConcepts.core.length }})
           </button>
           <button class="td-nav-item" :class="{ active: scrollTarget === 'peripheral' }" @click="scrollTo('peripheral')">
-            边缘概念 ({{ panorama.grouped_concepts.peripheral.length }})
+            边缘概念 ({{ displayGroupedConcepts.peripheral.length }})
           </button>
         </nav>
 
@@ -139,8 +147,68 @@
 
         <!-- Tab 1: Concept Groups -->
         <div v-if="activeTab === 'groups'" class="td-content">
-          <section v-if="panorama.grouped_concepts.bridge.length" id="group-bridge" class="td-group-section">
-            <h3 class="td-group-title">桥接概念 <span class="td-count">{{ panorama.grouped_concepts.bridge.length }}</span></h3>
+          <section v-if="hasSourceContext && currentSourceConcepts.length" id="group-source" class="td-group-section td-source-context-section">
+            <div class="td-source-context-head">
+              <div>
+                <h3 class="td-group-title">当前文章贡献的概念 <span class="td-count">{{ currentSourceConcepts.length }}</span></h3>
+                <p class="td-group-hint">
+                  这些概念来自 {{ sourceContextName }}，已置顶显示；下面继续看该主题的其他全局概念。
+                </p>
+              </div>
+              <div class="td-source-ratio">
+                {{ currentSourceConcepts.length }} / {{ panorama.stats.concept_count }} 来自当前文章
+              </div>
+            </div>
+            <div class="td-concept-grid">
+              <div
+                v-for="c in currentSourceConcepts"
+                :key="c.entry_id"
+                class="td-concept-card td-concept-card-source"
+              >
+                <div class="td-cc-header">
+                  <span class="td-cc-name">{{ c.canonical_name }}</span>
+                  <span class="td-cc-type">{{ c.concept_type }}</span>
+                </div>
+                <p v-if="c.description" class="td-cc-desc">{{ c.description.slice(0, 100) }}{{ c.description.length > 100 ? '...' : '' }}</p>
+                <div class="td-cc-meta">
+                  <span class="td-source-badge">来自当前文章</span>
+                  <span>{{ conceptSourceKey(c) }}</span>
+                </div>
+                <div v-if="conceptSourceLinks(c).length" class="td-cc-sources">
+                  <div class="td-cc-sources-head">
+                    <span>来源文章</span>
+                    <span>{{ conceptSourceLinks(c).length }} 篇</span>
+                  </div>
+                  <div class="td-cc-source-list">
+                    <a
+                      v-for="link in visibleSourceLinks(c)"
+                      :key="link.project_id + link.concept_key"
+                      class="td-source-link"
+                      :href="sourceArticleHref(link)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      :title="`打开来源文章：${sourceArticleTitle(link)}`"
+                    >
+                      {{ sourceArticleTitle(link) }}
+                    </a>
+                    <span
+                      v-if="hiddenSourceLinks(c).length"
+                      class="td-source-more"
+                      :title="sourceArticleTitleList(hiddenSourceLinks(c))"
+                    >+{{ hiddenSourceLinks(c).length }}</span>
+                  </div>
+                </div>
+                <router-link :to="conceptRoute(c.entry_id)" class="td-cc-link">查看详情 &rarr;</router-link>
+              </div>
+            </div>
+          </section>
+
+          <div v-if="hasSourceContext && currentSourceConcepts.length" class="td-other-global-label">
+            该主题的其他全局概念
+          </div>
+
+          <section v-if="displayGroupedConcepts.bridge.length" id="group-bridge" class="td-group-section">
+            <h3 class="td-group-title">桥接概念 <span class="td-count">{{ displayGroupedConcepts.bridge.length }}</span></h3>
             <p class="td-group-hint">连接不同文章的关键概念，拥有跨文章关系</p>
 
             <!-- Confirmed members first -->
@@ -158,11 +226,34 @@
                   <p v-if="c.description" class="td-cc-desc">{{ c.description.slice(0, 100) }}{{ c.description.length > 100 ? '...' : '' }}</p>
                   <div class="td-cc-meta">
                     <span class="td-cc-role td-cc-role-member">已确认</span>
-                    <span>{{ c.source_links?.length || 0 }} 文章</span>
                     <span class="td-cc-xrel">x-rel {{ c.xrel_count }}</span>
                     <span>桥接分 {{ c.bridge_score.toFixed(1) }}</span>
                   </div>
-                  <router-link :to="`/workspace/entry/${c.entry_id}`" class="td-cc-link">查看详情 &rarr;</router-link>
+                  <div v-if="conceptSourceLinks(c).length" class="td-cc-sources">
+                    <div class="td-cc-sources-head">
+                      <span>来源文章</span>
+                      <span>{{ conceptSourceLinks(c).length }} 篇</span>
+                    </div>
+                    <div class="td-cc-source-list">
+                      <a
+                        v-for="link in visibleSourceLinks(c)"
+                        :key="link.project_id + link.concept_key"
+                        class="td-source-link"
+                        :href="sourceArticleHref(link)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        :title="`打开来源文章：${sourceArticleTitle(link)}`"
+                      >
+                        {{ sourceArticleTitle(link) }}
+                      </a>
+                      <span
+                        v-if="hiddenSourceLinks(c).length"
+                        class="td-source-more"
+                        :title="sourceArticleTitleList(hiddenSourceLinks(c))"
+                      >+{{ hiddenSourceLinks(c).length }}</span>
+                    </div>
+                  </div>
+                  <router-link :to="conceptRoute(c.entry_id)" class="td-cc-link">查看详情 &rarr;</router-link>
                 </div>
               </div>
             </div>
@@ -182,41 +273,105 @@
                   <p v-if="c.description" class="td-cc-desc">{{ c.description.slice(0, 100) }}{{ c.description.length > 100 ? '...' : '' }}</p>
                   <div class="td-cc-meta">
                     <span class="td-cc-role td-cc-role-candidate">候选</span>
-                    <span>{{ c.source_links?.length || 0 }} 文章</span>
                     <span class="td-cc-xrel">x-rel {{ c.xrel_count }}</span>
                     <span>桥接分 {{ c.bridge_score.toFixed(1) }}</span>
                   </div>
-                  <router-link :to="`/workspace/entry/${c.entry_id}`" class="td-cc-link">查看详情 &rarr;</router-link>
+                  <div v-if="conceptSourceLinks(c).length" class="td-cc-sources">
+                    <div class="td-cc-sources-head">
+                      <span>来源文章</span>
+                      <span>{{ conceptSourceLinks(c).length }} 篇</span>
+                    </div>
+                    <div class="td-cc-source-list">
+                      <a
+                        v-for="link in visibleSourceLinks(c)"
+                        :key="link.project_id + link.concept_key"
+                        class="td-source-link"
+                        :href="sourceArticleHref(link)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        :title="`打开来源文章：${sourceArticleTitle(link)}`"
+                      >
+                        {{ sourceArticleTitle(link) }}
+                      </a>
+                      <span
+                        v-if="hiddenSourceLinks(c).length"
+                        class="td-source-more"
+                        :title="sourceArticleTitleList(hiddenSourceLinks(c))"
+                      >+{{ hiddenSourceLinks(c).length }}</span>
+                    </div>
+                  </div>
+                  <router-link :to="conceptRoute(c.entry_id)" class="td-cc-link">查看详情 &rarr;</router-link>
                 </div>
               </div>
             </div>
           </section>
 
-          <section v-if="panorama.grouped_concepts.core.length" id="group-core" class="td-group-section">
-            <h3 class="td-group-title">核心概念 <span class="td-count">{{ panorama.grouped_concepts.core.length }}</span></h3>
+          <section v-if="displayGroupedConcepts.core.length" id="group-core" class="td-group-section">
+            <h3 class="td-group-title">核心概念 <span class="td-count">{{ displayGroupedConcepts.core.length }}</span></h3>
             <p class="td-group-hint">主题的核心成员概念</p>
             <div class="td-concept-grid">
-              <div v-for="c in panorama.grouped_concepts.core" :key="c.entry_id" class="td-concept-card">
+              <div v-for="c in displayGroupedConcepts.core" :key="c.entry_id" class="td-concept-card">
                 <div class="td-cc-header">
                   <span class="td-cc-name">{{ c.canonical_name }}</span>
                   <span class="td-cc-type">{{ c.concept_type }}</span>
                 </div>
                 <p v-if="c.description" class="td-cc-desc">{{ c.description.slice(0, 100) }}{{ c.description.length > 100 ? '...' : '' }}</p>
-                <div class="td-cc-meta">
-                  <span>{{ c.source_links?.length || 0 }} 文章</span>
+                <div v-if="conceptSourceLinks(c).length" class="td-cc-sources">
+                  <div class="td-cc-sources-head">
+                    <span>来源文章</span>
+                    <span>{{ conceptSourceLinks(c).length }} 篇</span>
+                  </div>
+                  <div class="td-cc-source-list">
+                    <a
+                      v-for="link in visibleSourceLinks(c)"
+                      :key="link.project_id + link.concept_key"
+                      class="td-source-link"
+                      :href="sourceArticleHref(link)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      :title="`打开来源文章：${sourceArticleTitle(link)}`"
+                    >
+                      {{ sourceArticleTitle(link) }}
+                    </a>
+                    <span
+                      v-if="hiddenSourceLinks(c).length"
+                      class="td-source-more"
+                      :title="sourceArticleTitleList(hiddenSourceLinks(c))"
+                    >+{{ hiddenSourceLinks(c).length }}</span>
+                  </div>
                 </div>
-                <router-link :to="`/workspace/entry/${c.entry_id}`" class="td-cc-link">查看详情 &rarr;</router-link>
+                <router-link :to="conceptRoute(c.entry_id)" class="td-cc-link">查看详情 &rarr;</router-link>
               </div>
             </div>
           </section>
 
-          <section v-if="panorama.grouped_concepts.peripheral.length" id="group-peripheral" class="td-group-section">
-            <h3 class="td-group-title">边缘概念 <span class="td-count">{{ panorama.grouped_concepts.peripheral.length }}</span></h3>
+          <section v-if="displayGroupedConcepts.peripheral.length" id="group-peripheral" class="td-group-section">
+            <h3 class="td-group-title">边缘概念 <span class="td-count">{{ displayGroupedConcepts.peripheral.length }}</span></h3>
             <div class="td-concept-grid compact">
-              <div v-for="c in panorama.grouped_concepts.peripheral" :key="c.entry_id" class="td-concept-card small">
+              <div v-for="c in displayGroupedConcepts.peripheral" :key="c.entry_id" class="td-concept-card small">
                 <span class="td-cc-name">{{ c.canonical_name }}</span>
                 <span class="td-cc-type">{{ c.concept_type }}</span>
-                <router-link :to="`/workspace/entry/${c.entry_id}`" class="td-cc-link">查看 &rarr;</router-link>
+                <div v-if="conceptSourceLinks(c).length" class="td-cc-sources td-cc-sources-compact">
+                  <div class="td-cc-source-list">
+                    <a
+                      v-for="link in visibleSourceLinks(c)"
+                      :key="link.project_id + link.concept_key"
+                      class="td-source-link"
+                      :href="sourceArticleHref(link)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      :title="`打开来源文章：${sourceArticleTitle(link)}`"
+                    >
+                      {{ sourceArticleTitle(link) }}
+                    </a>
+                    <span
+                      v-if="hiddenSourceLinks(c).length"
+                      class="td-source-more"
+                      :title="sourceArticleTitleList(hiddenSourceLinks(c))"
+                    >+{{ hiddenSourceLinks(c).length }}</span>
+                  </div>
+                </div>
+                <router-link :to="conceptRoute(c.entry_id)" class="td-cc-link">查看 &rarr;</router-link>
               </div>
             </div>
           </section>
@@ -248,7 +403,7 @@
                     <button class="btn-xrel btn-primary" @click="handleAttachSuggestion(s.entry_id)">
                       纳入候选
                     </button>
-                    <router-link :to="`/workspace/entry/${s.entry_id}`" class="btn-xrel">
+                    <router-link :to="conceptRoute(s.entry_id)" class="btn-xrel">
                       查看详情
                     </router-link>
                   </div>
@@ -277,7 +432,7 @@
                     <button class="btn-xrel" @click="handleAttachSuggestion(s.entry_id)">
                       纳入候选
                     </button>
-                    <router-link :to="`/workspace/entry/${s.entry_id}`" class="btn-xrel">
+                    <router-link :to="conceptRoute(s.entry_id)" class="btn-xrel">
                       查看详情
                     </router-link>
                   </div>
@@ -323,6 +478,7 @@ import CrossRelationCard from '../../components/CrossRelationCard.vue'
 import { getThemePanorama } from '../../data/dataClient'
 import { discoverCrossRelations, updateCrossRelation, deleteCrossRelation } from '../../services/api/registryApi'
 import { appMode } from '../../runtime/appMode'
+import { buildSourceArticleGraphHref } from '../../utils/articleGraphRoute'
 // Raw axios for the live-only Discover V2 endpoint. The api/index.js
 // response interceptor already unwraps to the backend envelope — so what
 // we get back is {success, data, ...}. Payload lives at ONE level down.
@@ -338,6 +494,7 @@ const activeTab = ref('groups')
 const scrollTarget = ref('')
 const discovering = ref(false)
 const discoverResult = ref('')
+const SOURCE_LINK_INLINE_LIMIT = 2
 
 // Discover V2 — theme-scoped status aggregate (P4 step 8). Fetched
 // alongside the panorama so the sidebar can surface history + jobs +
@@ -368,6 +525,45 @@ const conceptMap = computed(() => {
   return map
 })
 
+const themeId = computed(() => props.themeId || route.params.themeId || '')
+const contextProjectId = computed(() => {
+  const raw = route.query.project_id || route.query.projectId || ''
+  return Array.isArray(raw) ? (raw[0] || '') : raw
+})
+const hasSourceContext = computed(() => Boolean(contextProjectId.value))
+const allThemeConcepts = computed(() => {
+  if (!panorama.value) return []
+  const groups = panorama.value.grouped_concepts || {}
+  return [
+    ...(groups.bridge || []),
+    ...(groups.core || []),
+    ...(groups.peripheral || []),
+  ]
+})
+const currentSourceConcepts = computed(() => {
+  if (!hasSourceContext.value) return []
+  return allThemeConcepts.value
+    .filter((concept) => isFromCurrentProject(concept))
+    .sort(compareSourceContextConcepts)
+})
+const currentSourceEntryIds = computed(() => new Set(currentSourceConcepts.value.map((c) => c.entry_id)))
+const displayGroupedConcepts = computed(() => {
+  const groups = panorama.value?.grouped_concepts || { bridge: [], core: [], peripheral: [] }
+  if (!hasSourceContext.value || !currentSourceEntryIds.value.size) return groups
+  const keepOther = (concept) => !currentSourceEntryIds.value.has(concept.entry_id)
+  return {
+    bridge: (groups.bridge || []).filter(keepOther),
+    core: (groups.core || []).filter(keepOther),
+    peripheral: (groups.peripheral || []).filter(keepOther),
+  }
+})
+const sourceContextName = computed(() => {
+  const named = currentSourceConcepts.value
+    .flatMap((concept) => concept.source_links || [])
+    .find((link) => link.project_id === contextProjectId.value && link.project_name)
+  return named?.project_name || contextProjectId.value
+})
+
 // Bridge concepts split by role so confirmed ones surface above candidates
 // (see GPT feedback P3: candidate-role concepts shouldn't lead the panel).
 // Sort rule: role=member first (desc by bridge_score), then candidate
@@ -375,12 +571,76 @@ const conceptMap = computed(() => {
 // from the API is preserved.
 const bridgeMembers = computed(() => {
   if (!panorama.value) return []
-  return panorama.value.grouped_concepts.bridge.filter(c => c.role === 'member')
+  return displayGroupedConcepts.value.bridge.filter(c => c.role === 'member')
 })
 const bridgeCandidates = computed(() => {
   if (!panorama.value) return []
-  return panorama.value.grouped_concepts.bridge.filter(c => c.role !== 'member')
+  return displayGroupedConcepts.value.bridge.filter(c => c.role !== 'member')
 })
+
+function isFromCurrentProject(concept) {
+  if (!contextProjectId.value) return false
+  return (concept?.source_links || []).some((link) => link.project_id === contextProjectId.value)
+}
+
+function compareSourceContextConcepts(a, b) {
+  const roleRank = { member: 0, candidate: 1 }
+  const roleDelta = (roleRank[a.role] ?? 2) - (roleRank[b.role] ?? 2)
+  if (roleDelta) return roleDelta
+  const bridgeDelta = (b.bridge_score || 0) - (a.bridge_score || 0)
+  if (bridgeDelta) return bridgeDelta
+  const scoreDelta = (b.score || 0) - (a.score || 0)
+  if (scoreDelta) return scoreDelta
+  return String(a.canonical_name || '').localeCompare(String(b.canonical_name || ''), 'zh-CN')
+}
+
+function conceptSourceKey(concept) {
+  const link = (concept?.source_links || []).find((item) => item.project_id === contextProjectId.value)
+  return link?.concept_key || `${concept.source_links?.length || 0} 来源`
+}
+
+function conceptSourceLinks(concept) {
+  return Array.isArray(concept?.source_links)
+    ? concept.source_links.filter((link) => link?.project_id)
+    : []
+}
+
+function visibleSourceLinks(concept) {
+  return conceptSourceLinks(concept).slice(0, SOURCE_LINK_INLINE_LIMIT)
+}
+
+function hiddenSourceLinks(concept) {
+  return conceptSourceLinks(concept).slice(SOURCE_LINK_INLINE_LIMIT)
+}
+
+function sourceArticleTitle(link) {
+  return link?.project_name || link?.project_id || '来源文章'
+}
+
+function sourceArticleTitleList(links) {
+  return links.map(sourceArticleTitle).filter(Boolean).join(' / ')
+}
+
+function sourceArticleHref(link) {
+  return buildSourceArticleGraphHref(link, { from: 'registry' })
+}
+
+function conceptRoute(entryId) {
+  const query = {}
+  if (themeId.value) query.theme_id = themeId.value
+  if (contextProjectId.value) {
+    query.from = 'theme-panorama'
+    query.project_id = contextProjectId.value
+  }
+  return { path: `/workspace/entry/${entryId}`, query }
+}
+
+function conceptHref(entryId) {
+  const routeInfo = conceptRoute(entryId)
+  const params = new URLSearchParams(routeInfo.query)
+  const qs = params.toString()
+  return qs ? `${routeInfo.path}?${qs}` : routeInfo.path
+}
 
 // A description is considered "degraded" when it matches one of the legacy
 // auto-generated templates (e.g. "关联节点：xxx") or when the backend flags
@@ -434,7 +694,7 @@ function formatDate(iso) {
 }
 
 async function handleAttachSuggestion(entryId) {
-  const tid = props.themeId || route.params.themeId
+  const tid = themeId.value
   try {
     await fetch(`/api/registry/themes/${tid}/members`, {
       method: 'POST',
@@ -452,7 +712,7 @@ async function handleAttachSuggestion(entryId) {
 }
 
 async function loadPanorama() {
-  const tid = props.themeId || route.params.themeId
+  const tid = themeId.value
   if (!tid) return
   loading.value = true
   error.value = ''
@@ -529,11 +789,11 @@ function scrollTo(group) {
 }
 
 function navigateToConcept(entryId) {
-  window.open(`/workspace/entry/${entryId}`, '_blank')
+  window.open(conceptHref(entryId), '_blank')
 }
 
 async function handleDiscover() {
-  const tid = props.themeId || route.params.themeId
+  const tid = themeId.value
   discovering.value = true
   discoverResult.value = ''
   try {
@@ -671,6 +931,7 @@ watch(appMode, loadPanorama)
 }
 .td-nav-item:hover { background: #f3f4f6; }
 .td-nav-item.active { background: #eef2ff; color: #4338ca; font-weight: 600; }
+.td-nav-item-source { color: #9a5a12; }
 
 .td-articles { margin-top: 20px; }
 .td-article-item { font-size: 12px; color: #5a6573; padding: 4px 0; }
@@ -697,6 +958,36 @@ watch(appMode, loadPanorama)
 .td-group-title { font-size: 18px; font-weight: 700; color: #1e1813; margin: 0 0 4px; }
 .td-count { font-size: 14px; font-weight: 400; color: #9ca3af; }
 .td-group-hint { font-size: 12px; color: #6b7280; margin: 0 0 16px; }
+.td-source-context-section {
+  border: 1px solid #e3b873;
+  border-radius: 12px;
+  padding: 16px;
+  background: #fffaf0;
+}
+.td-source-context-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+.td-source-ratio {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #efd2a3;
+  color: #9a5a12;
+  font-size: 12px;
+  font-weight: 700;
+}
+.td-other-global-label {
+  margin: 6px 0 16px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 
 .td-concept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .td-concept-grid.compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
@@ -708,6 +999,7 @@ watch(appMode, loadPanorama)
 .td-concept-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
 .td-concept-card.bridge { border-left: 3px solid #6366f1; }
 .td-concept-card-candidate { border-left-color: #a5b4fc; background: #fafbff; }
+.td-concept-card-source { border-color: #e3b873; background: #fffdf8; }
 .td-concept-card.small { padding: 10px 14px; display: flex; align-items: center; gap: 8px; }
 
 .td-bridge-subgroup { margin-bottom: 18px; }
@@ -736,6 +1028,77 @@ watch(appMode, loadPanorama)
 .td-cc-xrel { color: #6366f1; font-weight: 600; }
 .td-cc-link { font-size: 12px; color: #4a6fa5; text-decoration: none; }
 .td-cc-link:hover { text-decoration: underline; }
+.td-cc-sources {
+  margin: 8px 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e6edf5;
+}
+.td-cc-sources-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+}
+.td-cc-source-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.td-source-link {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid #dbe5f0;
+  color: #315f9d;
+  font-size: 11px;
+  line-height: 1.25;
+  text-decoration: none;
+}
+.td-source-link:hover {
+  border-color: #9bb7d9;
+  background: #f0f6ff;
+}
+.td-source-more {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: #eef2f7;
+  border: 1px solid #dbe5f0;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.25;
+  cursor: help;
+}
+.td-cc-sources-compact {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.td-cc-sources-compact .td-source-link {
+  max-width: 140px;
+  padding: 2px 6px;
+}
+.td-source-badge {
+  color: #9a5a12;
+  background: #fff3d8;
+  border: 1px solid #efd2a3;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-weight: 700;
+}
 
 /* Bridge list */
 .td-bridge-list { display: flex; flex-direction: column; gap: 12px; }

@@ -59,7 +59,7 @@ function makeLivePanorama(themeName) {
         description: 'live panorama description',
         keywords: ['live'],
       },
-      stats: { concept_count: 1, article_count: 1, relation_count: 0 },
+      stats: { concept_count: 2, article_count: 2, relation_count: 0 },
       grouped_concepts: {
         core: [
           {
@@ -67,7 +67,39 @@ function makeLivePanorama(themeName) {
             canonical_name: 'Live Concept',
             concept_type: 'Technology',
             description: 'live concept description',
-            source_links: [],
+            source_links: [
+              {
+                project_id: 'proj_current',
+                project_name: 'Current source article',
+                concept_key: 'Technology:live concept',
+              },
+              {
+                project_id: 'proj_archive',
+                project_name: 'Archive source article with a long title',
+                concept_key: 'Technology:live concept',
+              },
+              {
+                project_id: 'proj_hidden',
+                project_name: 'Hidden source article',
+                concept_key: 'Technology:live concept',
+              },
+            ],
+            role: 'core',
+            xrel_count: 0,
+            description_degraded: false,
+          },
+          {
+            entry_id: 'entry_other',
+            canonical_name: 'Other Concept',
+            concept_type: 'Method',
+            description: 'other concept description',
+            source_links: [
+              {
+                project_id: 'proj_other',
+                project_name: 'Other article',
+                concept_key: 'Method:other concept',
+              },
+            ],
             role: 'core',
             xrel_count: 0,
             description_degraded: false,
@@ -96,6 +128,7 @@ describe('ThemeDetailPage', () => {
     window.localStorage.clear()
     setMode('live')
     routeState.params.themeId = 'live_theme_1'
+    routeState.query = {}
     getThemePanoramaMock.mockResolvedValue(makeLivePanorama('Live Theme Alpha'))
   })
 
@@ -107,6 +140,46 @@ describe('ThemeDetailPage', () => {
     expect(getThemePanoramaMock).toHaveBeenCalledWith('live_theme_1')
     expect(wrapper.text()).toContain('Live Theme Alpha')
     expect(wrapper.text()).toContain('Live Concept')
+  })
+
+  it('shows compact source article links on concept cards', async () => {
+    const wrapper = mount(ThemeDetailPage, {
+      global: { mocks: { $route: { fullPath: routeState.path } } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('来源文章')
+    expect(wrapper.text()).toContain('3 篇')
+    expect(wrapper.text()).toContain('Current source article')
+    expect(wrapper.text()).toContain('Archive source article with a long title')
+    expect(wrapper.text()).toContain('+1')
+
+    const sourceLinks = wrapper.findAll('a.td-source-link')
+    expect(sourceLinks.some((link) => link.text() === 'Hidden source article')).toBe(false)
+    expect(sourceLinks[0].attributes('href')).toBe(
+      '/workspace/proj_current/article?view=reading&focusNode=Technology%3Alive+concept&from=registry',
+    )
+    expect(sourceLinks[0].attributes('target')).toBe('_blank')
+    expect(sourceLinks[0].attributes('rel')).toBe('noopener noreferrer')
+
+    const more = wrapper.find('.td-source-more')
+    expect(more.text()).toBe('+1')
+    expect(more.attributes('title')).toBe('Hidden source article')
+  })
+
+  it('highlights concepts contributed by the current project context', async () => {
+    routeState.query = { project_id: 'proj_current', from: 'project-theme-signals' }
+    const wrapper = mount(ThemeDetailPage, {
+      global: { mocks: { $route: { fullPath: `${routeState.path}?project_id=proj_current` } } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前文章贡献的概念')
+    expect(wrapper.text()).toContain('1 / 2 来自当前文章')
+    expect(wrapper.text()).toContain('Current source article')
+    expect(wrapper.text()).toContain('Technology:live concept')
+    expect(wrapper.text()).toContain('该主题的其他全局概念')
+    expect(wrapper.text()).toContain('Other Concept')
   })
 
   it('demo mode loads a real fixture theme panorama (live mock not called)', async () => {
