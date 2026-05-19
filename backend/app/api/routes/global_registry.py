@@ -31,6 +31,8 @@ from ...services.registry.global_concept_registry import (
     unlink_project_concept,
     update_entry,
 )
+from ...services.kfc_material_graph_store import KfcMaterialGraphStore, KfcMaterialGraphStoreError
+from ...services.registry.source_evidence_resolver import resolve_source_evidence
 
 
 from ...services.registry.cross_concept_relations import (
@@ -42,6 +44,27 @@ def _model_dump(model):
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _with_dynamic_source_evidence(entry: dict) -> dict:
+    """Attach read-time evidence refs without mutating the JSON registry."""
+    enriched = dict(entry)
+    refs = resolve_source_evidence(enriched, max_refs=5)
+    enriched["source_evidence_refs"] = refs
+    primary = next((ref for ref in refs if not ref.get("degraded")), refs[0] if refs else None)
+    if primary:
+        def _fill_if_empty(key: str, value: str) -> None:
+            if not enriched.get(key) and value:
+                enriched[key] = value
+
+        _fill_if_empty("source_article_id", primary.get("source_article_id") or primary.get("project_id") or "")
+        _fill_if_empty("source_article_title", primary.get("source_article_title") or primary.get("project_name") or "")
+        _fill_if_empty("source_markdown_path", primary.get("source_markdown_path") or "")
+        _fill_if_empty("source_quote", primary.get("source_excerpt") or primary.get("source_text") or "")
+        _fill_if_empty("source_excerpt", primary.get("source_excerpt") or primary.get("source_text") or "")
+        _fill_if_empty("source_context", primary.get("source_context") or primary.get("source_text") or "")
+        _fill_if_empty("source_material_slice_id", primary.get("source_node_uuid") or "")
+    return enriched
 
 
 # ---------------------------------------------------------------------------
@@ -62,11 +85,67 @@ def list_registry_concepts():
 def get_registry_concept(entry_id: str):
     """Get a single registry entry."""
     try:
-        entry = get_entry(entry_id)
+        entry = _with_dynamic_source_evidence(get_entry(entry_id))
         schema = RegistryEntrySchema(**entry)
         return jsonify({"success": True, "data": _model_dump(schema)})
     except RegistryEntryNotFoundError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
+
+
+@registry_bp.route("/concepts/<entry_id>/graph", methods=["GET"])
+def get_registry_concept_graph(entry_id: str):
+    """Return deterministic KFC material graph status/details for a concept."""
+    try:
+        store = KfcMaterialGraphStore()
+        graph = store.get_graph_for_concept(entry_id)
+        summary = store.graph_summary(graph, entry_id)
+        return jsonify({"success": True, "data": {**summary, "graph": graph}})
+    except KfcMaterialGraphStoreError as exc:
+        return (
+            jsonify({"success": False, "error": str(exc), "code": getattr(exc, "code", "validation_error")}),
+            getattr(exc, "status_code", 400),
+        )
+
+
+@registry_bp.route("/concepts/<entry_id>/graph/snapshot", methods=["POST"])
+def create_registry_concept_graph_snapshot(entry_id: str):
+    """Create or return a deterministic KFC material graph snapshot."""
+    try:
+        result = KfcMaterialGraphStore().ensure_snapshot_for_concept(
+            entry_id,
+            actor=str((request.get_json(silent=True) or {}).get("actor") or "human"),
+            force=True,
+        )
+        graph = result["graph"]
+        return jsonify(
+            {
+                "success": True,
+                "data": {
+                    **KfcMaterialGraphStore().graph_summary(graph, entry_id),
+                    "created": result.get("created", False),
+                    "reason": result.get("reason", ""),
+                    "graph": graph,
+                },
+            }
+        )
+    except KfcMaterialGraphStoreError as exc:
+        return (
+            jsonify({"success": False, "error": str(exc), "code": getattr(exc, "code", "validation_error")}),
+            getattr(exc, "status_code", 400),
+        )
+
+
+@registry_bp.route("/concepts/<entry_id>/graphification-requests", methods=["POST"])
+def create_registry_concept_graphification_request(entry_id: str):
+    """Request external graphification proposal without executing it in KFC."""
+    try:
+        result = KfcMaterialGraphStore().create_graphification_request(entry_id, request.get_json(silent=True) or {})
+        return jsonify({"success": True, "data": result}), 201
+    except KfcMaterialGraphStoreError as exc:
+        return (
+            jsonify({"success": False, "error": str(exc), "code": getattr(exc, "code", "validation_error")}),
+            getattr(exc, "status_code", 400),
+        )
 
 
 @registry_bp.route("/concepts", methods=["POST"])

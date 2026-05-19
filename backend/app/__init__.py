@@ -69,6 +69,21 @@ def create_app(config_class=Config):
     from .api.routes.llm_mode_config import llm_mode_config_bp
     from .api.routes.vault import vault_bp
     from .api.routes.article_raw import article_raw_bp
+    from .api.routes.topic_clusters import topic_cluster_links_bp, topic_clusters_bp
+    from .api.routes.kfc_material_graphs import kfc_assets_bp
+    from .api.routes.wiki_intake import wiki_intake_bp
+    from .api.routes.research_projects import research_projects_bp
+    from .api.routes.research_project_evidence import research_project_evidence_bp
+    from .api.routes.research_project_writeback import research_project_writeback_bp
+    from .api.routes.research_project_synthesis import research_project_synthesis_bp
+    from .api.routes.research_project_artifact_packs import research_project_artifact_packs_bp
+    from .api.routes.research_project_decisions import research_project_decisions_bp
+    from .api.routes.research_project_briefings import research_project_briefings_bp
+    from .api.routes.research_project_traceability import research_project_traceability_bp
+    from .api.routes.research_project_governance import research_project_governance_bp
+    from .api.routes.research_project_review_history import research_project_review_history_bp
+    from .api.routes.research_project_snapshots import research_project_snapshots_bp
+    from .api.routes.research_project_snapshot_review_notes import research_project_snapshot_review_notes_bp
     app.register_blueprint(graph_bp, url_prefix='/api/graph')
     app.register_blueprint(simulation_bp, url_prefix='/api/simulation')
     app.register_blueprint(report_bp, url_prefix='/api/report')
@@ -83,6 +98,22 @@ def create_app(config_class=Config):
     app.register_blueprint(llm_mode_config_bp)
     app.register_blueprint(vault_bp)
     app.register_blueprint(article_raw_bp)
+    app.register_blueprint(topic_clusters_bp)
+    app.register_blueprint(topic_cluster_links_bp)
+    app.register_blueprint(kfc_assets_bp)
+    app.register_blueprint(wiki_intake_bp)
+    app.register_blueprint(research_projects_bp)
+    app.register_blueprint(research_project_evidence_bp)
+    app.register_blueprint(research_project_writeback_bp)
+    app.register_blueprint(research_project_synthesis_bp)
+    app.register_blueprint(research_project_artifact_packs_bp)
+    app.register_blueprint(research_project_decisions_bp)
+    app.register_blueprint(research_project_briefings_bp)
+    app.register_blueprint(research_project_traceability_bp)
+    app.register_blueprint(research_project_governance_bp)
+    app.register_blueprint(research_project_review_history_bp)
+    app.register_blueprint(research_project_snapshots_bp)
+    app.register_blueprint(research_project_snapshot_review_notes_bp)
     
     # 健康检查
     @app.route('/health')

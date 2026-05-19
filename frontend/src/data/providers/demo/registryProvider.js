@@ -36,6 +36,25 @@ export async function getRegistryConcept(entryId) {
   return { success: true, data: clone(entry) }
 }
 
+export async function getRegistryConceptGraph(entryId) {
+  const entry = findEntry(entryId)
+  if (!entry) {
+    throw new Error(`Demo data not available for concept "${entryId}".`)
+  }
+  return {
+    success: true,
+    data: {
+      concept_id: entryId,
+      graph_status: 'not_available',
+      material_graph_id: '',
+      node_count: 0,
+      edge_count: 0,
+      cross_article_link_count: 0,
+      graph: null,
+    },
+  }
+}
+
 export async function listCrossRelations(params = {}) {
   const entryId = params.entry_id
   const rows = entryId ? crossRelationsForEntry(entryId) : crossRelations

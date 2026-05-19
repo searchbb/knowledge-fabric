@@ -118,7 +118,7 @@ describe('ConceptViewPage', () => {
     expect(candidateButton).toBeTruthy()
     await candidateButton.trigger('click')
 
-    expect(wrapper.text()).toContain('Selected Candidate')
+    expect(wrapper.text()).toContain('当前候选')
     expect(wrapper.text()).toContain('LiveOnly-版本控制')
     expect(wrapper.text()).toContain('关联节点：GitHub')
   })

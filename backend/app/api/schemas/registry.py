@@ -14,12 +14,67 @@ class RegistrySourceLinkSchema(BaseModel):
     linked_at: str = ""
 
 
+class RegistrySourceEvidenceRefSchema(BaseModel):
+    entry_id: str = ""
+    project_id: str = ""
+    project_name: str = ""
+    concept_key: str = ""
+    source_node_uuid: str = ""
+    source_text: str = ""
+    source_excerpt: str = ""
+    source_context: str = ""
+    source_article_id: str = ""
+    source_article_title: str = ""
+    source_markdown_path: str = ""
+    source_content_hash: str = ""
+    source_material_slice_id: str = ""
+    source_lead_id: str = ""
+    group_label: str = ""
+    group_title: str = ""
+    degraded: bool = False
+    degraded_reason: str = ""
+    resolved_from: str = ""
+
+
 class RegistryEntrySchema(BaseModel):
     entry_id: str
+    concept_id: str | None = None
     canonical_name: str
+    label: str | None = None
     concept_type: str = "Concept"
+    asset_type: str | None = None
     aliases: list[str] = Field(default_factory=list)
+    definition: str | None = None
     description: str = ""
+    lifecycle_status: str | None = None
+    quality_state: str | None = None
+    review_state: str | None = None
+    confidence: float | None = None
+    created_from: str | None = None
+    created_by: str | None = None
+    source_article_id: str | None = None
+    source_markdown_path: str | None = None
+    source_content_hash: str | None = None
+    source_quote: str | None = None
+    source_excerpt: str | None = None
+    source_context: str | None = None
+    source_article_title: str | None = None
+    digest_input_text: str | None = None
+    digested_text: str | None = None
+    related_existing_concepts: list[dict[str, Any]] = Field(default_factory=list)
+    source_lead_id: str | None = None
+    source_material_slice_id: str | None = None
+    linked_topic_cluster_ids: list[str] = Field(default_factory=list)
+    linked_research_project_ids: list[str] = Field(default_factory=list)
+    linked_wiki_topic_ids: list[str] = Field(default_factory=list)
+    graph_status: str | None = None
+    material_graph_id: str | None = None
+    graph_node_count: int | None = None
+    graph_edge_count: int | None = None
+    cross_article_link_count: int | None = None
+    graphification_request_id: str | None = None
+    graphification_request_ids: list[str] = Field(default_factory=list)
+    version: int | None = None
     # Description provenance — None when unknown. Values: "manual" |
     # "article_node_summary" | "legacy". Consumers use this to decide
     # whether a description is authoritative enough to trust without review.
@@ -32,6 +87,7 @@ class RegistryEntrySchema(BaseModel):
     # views show a warning icon instead of hiding the issue.
     description_degraded: bool = False
     source_links: list[RegistrySourceLinkSchema] = Field(default_factory=list)
+    source_evidence_refs: list[RegistrySourceEvidenceRefSchema] = Field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
 

@@ -8,10 +8,10 @@
       :aria-expanded="isOpen"
     >
       <div class="trigger-label">
-        <div class="kicker">{{ disabled ? '加载中...' : '当前项目' }}</div>
+        <div class="kicker">{{ disabled ? '加载中...' : '当前文章' }}</div>
         <div class="current-name">
           <span v-if="currentProject" class="name-text">{{ currentProject.project_name || currentProject.project_id }}</span>
-          <span v-else class="name-placeholder">未选择项目</span>
+          <span v-else class="name-placeholder">未选择文章</span>
         </div>
       </div>
       <span class="caret" aria-hidden="true">▾</span>
@@ -24,13 +24,13 @@
           v-model="search"
           type="text"
           class="panel-search"
-          placeholder="搜索项目名或 ID..."
+          placeholder="搜索文章名或 ID..."
         />
       </div>
       <div class="panel-list">
         <div v-if="loading" class="panel-empty">正在加载...</div>
         <div v-else-if="error" class="panel-error">{{ error }}</div>
-        <div v-else-if="!filtered.length" class="panel-empty">没有匹配项目</div>
+        <div v-else-if="!filtered.length" class="panel-empty">没有匹配文章</div>
         <button
           v-for="p in filtered"
           :key="p.project_id"

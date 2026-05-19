@@ -51,6 +51,7 @@ describe('loadProjectWorkbenchState', () => {
       },
     })
     expect(result.graphData.graph_id).toBe('graph_1')
+    expect(getGraphDataMock).toHaveBeenCalledWith('graph_1', { timeout: 8000 })
   })
 
   it('prefers live task result when it is still available', async () => {
@@ -88,5 +89,75 @@ describe('loadProjectWorkbenchState', () => {
         status: 'failed',
       },
     })
+  })
+
+  it('keeps project and reading state available when graph backend is down', async () => {
+    getProjectMock.mockResolvedValue({
+      success: true,
+      data: {
+        project_id: 'proj_1',
+        graph_id: 'graph_1',
+        graph_build_task_id: null,
+        reading_structure: {
+          title: '持久化阅读骨架',
+        },
+        phase1_task_result: {
+          artifacts: {
+            graph: {
+              graph_id: 'graph_1',
+              node_count: 46,
+              edge_count: 33,
+            },
+          },
+          reading_structure_status: {
+            status: 'generated',
+          },
+        },
+      },
+    })
+    getGraphDataMock.mockRejectedValue(new Error('Neo4j unavailable'))
+
+    const result = await loadProjectWorkbenchState('proj_1')
+
+    expect(result.project.reading_structure.title).toBe('持久化阅读骨架')
+    expect(result.phase1TaskResult.reading_structure_status.status).toBe('generated')
+    expect(result.graphData).toMatchObject({
+      graph_id: 'graph_1',
+      node_count: 46,
+      edge_count: 33,
+      unavailable: true,
+      unavailable_reason: 'Neo4j unavailable',
+    })
+  })
+
+  it('uses persisted phase1 snapshot for completed projects without probing stale task ids', async () => {
+    getProjectMock.mockResolvedValue({
+      success: true,
+      data: {
+        project_id: 'proj_1',
+        status: 'graph_completed',
+        graph_id: 'graph_1',
+        graph_build_task_id: 'stale_task_1',
+        phase1_task_result: {
+          provider: 'persisted',
+          reading_structure_status: {
+            status: 'generated',
+          },
+        },
+      },
+    })
+    getGraphDataMock.mockResolvedValue({
+      success: true,
+      data: {
+        graph_id: 'graph_1',
+        node_count: 46,
+        edge_count: 33,
+      },
+    })
+
+    const result = await loadProjectWorkbenchState('proj_1')
+
+    expect(getTaskStatusMock).not.toHaveBeenCalled()
+    expect(result.phase1TaskResult.provider).toBe('persisted')
   })
 })

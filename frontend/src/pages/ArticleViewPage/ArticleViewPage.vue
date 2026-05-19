@@ -1,5 +1,5 @@
 <template>
-  <section class="article-view">
+  <section class="article-view" :class="{ 'article-view--graph-maximized': graphMaximized }">
     <!-- Compact project metadata bar (replaces the old 3-card grid) -->
     <header class="meta-bar">
       <div class="meta-group">
@@ -8,7 +8,7 @@
       </div>
       <div class="meta-group">
         <span class="meta-label">图谱</span>
-        <span class="meta-value">{{ graphNodeCount }} 节点 · {{ graphEdgeCount }} 关系</span>
+        <span class="meta-value">{{ graphStatusLabel }}</span>
       </div>
       <div class="meta-group">
         <span class="meta-label">状态</span>
@@ -71,8 +71,54 @@
       </article>
 
       <!-- Interactive graph panel — the new P2 addition that closes T1 path -->
-      <div v-if="hasGraph" class="graph-wrapper">
+      <div
+        v-if="hasGraph"
+        class="graph-wrapper"
+        :class="{
+          'graph-wrapper--maximized': graphMaximized,
+          'graph-wrapper--with-raw': shouldShowRawCompanion,
+        }"
+      >
+        <template v-if="shouldShowRawCompanion">
+          <div class="article-maximized-workspace">
+            <section class="article-maximized-graph" aria-label="阅读图谱">
+              <GraphPanel
+                :graphData="graphData"
+                :loading="false"
+                :currentPhase="4"
+                :initialView="currentView"
+                :readingStructure="project?.reading_structure || null"
+                :schemaEntityTypes="project?.ontology?.entity_types || []"
+                :schemaRelationTypes="project?.ontology?.edge_types || []"
+                :focusNodeKey="focusNodeKey"
+                :fromSource="fromSource"
+                :domain="project?.domain || 'tech'"
+                @refresh="$emit('refresh')"
+                @toggle-maximize="toggleGraphMaximized"
+                @view-change="handleViewChange"
+                @node-select="handleGraphNodeSelect"
+              />
+            </section>
+            <aside class="article-maximized-raw" aria-label="文章原文对照">
+              <header class="raw-companion-head">
+                <span class="raw-companion-title">原文对照</span>
+                <button
+                  type="button"
+                  class="raw-companion-close"
+                  @click="rawCompanionOpen = false"
+                  title="折叠原文对照"
+                >×</button>
+              </header>
+              <ArticleRawPanel
+                :project-id="project.project_id"
+                :focus-target="effectiveRawFocusTarget"
+                :auto-scroll="true"
+              />
+            </aside>
+          </div>
+        </template>
         <GraphPanel
+          v-else
           :graphData="graphData"
           :loading="false"
           :currentPhase="4"
@@ -84,14 +130,16 @@
           :fromSource="fromSource"
           :domain="project?.domain || 'tech'"
           @refresh="$emit('refresh')"
+          @toggle-maximize="toggleGraphMaximized"
           @view-change="handleViewChange"
+          @node-select="handleGraphNodeSelect"
         />
       </div>
       <div v-else class="graph-empty">
         <div class="empty-icon">🗺️</div>
-        <div class="empty-title">暂无图谱数据</div>
+        <div class="empty-title">{{ graphEmptyTitle }}</div>
         <p class="empty-body">
-          项目尚未构建图谱。请先在自动处理队列提交抽取任务，或刷新查看最新构建状态。
+          {{ graphEmptyBody }}
         </p>
         <div class="empty-actions">
           <button class="empty-btn primary" :disabled="refreshing" @click="$emit('refresh')">
@@ -116,14 +164,11 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphPanel from '../../components/GraphPanel.vue'
 import ArticleRawPanel from './ArticleRawPanel.vue'
 import { normalizeGraphPanelView } from '../../utils/workbenchLayout'
-
-// 图谱 vs 原文 子 tab。默认图谱(保持原有行为);原文懒加载。
-const subTab = ref('graph')
 
 const props = defineProps({
   project: { type: Object, default: null },
@@ -140,9 +185,32 @@ defineEmits(['refresh'])
 const route = useRoute()
 const router = useRouter()
 
+// 图谱 vs 原文 子 tab。默认图谱(保持原有行为);原文懒加载。
+const subTab = ref('graph')
+const graphMaximized = ref(isSourceArticleFocusRoute(route.query))
+const rawCompanionOpen = ref(true)
+const rawFocusTarget = ref(null)
+
 const graphNodeCount = computed(() => props.graphData?.node_count ?? props.graphData?.nodes?.length ?? 0)
 const graphEdgeCount = computed(() => props.graphData?.edge_count ?? props.graphData?.edges?.length ?? 0)
-const hasGraph = computed(() => graphNodeCount.value > 0 || (Array.isArray(props.graphData?.nodes) && props.graphData.nodes.length > 0))
+const graphUnavailable = computed(() => Boolean(props.graphData?.unavailable))
+const hasGraph = computed(() => (
+  !graphUnavailable.value
+  && (graphNodeCount.value > 0 || (Array.isArray(props.graphData?.nodes) && props.graphData.nodes.length > 0))
+))
+const graphStatusLabel = computed(() => {
+  if (graphUnavailable.value) {
+    return `暂不可用 · 已记录 ${graphNodeCount.value} 节点 · ${graphEdgeCount.value} 关系`
+  }
+  return `${graphNodeCount.value} 节点 · ${graphEdgeCount.value} 关系`
+})
+const graphEmptyTitle = computed(() => (graphUnavailable.value ? '图谱后端暂不可用' : '暂无图谱数据'))
+const graphEmptyBody = computed(() => {
+  if (graphUnavailable.value) {
+    return props.graphData?.unavailable_reason || '项目和阅读骨架已加载；当前只是图谱后端没有返回可渲染节点。'
+  }
+  return '项目尚未构建图谱。请先在自动处理队列提交抽取任务，或刷新查看最新构建状态。'
+})
 
 const successRatio = computed(() => {
   const raw = props.phase1TaskResult?.build_outcome?.success_ratio
@@ -156,6 +224,65 @@ const buildStatus = computed(() => props.phase1TaskResult?.build_outcome?.status
 const currentView = computed(() => normalizeGraphPanelView(route.query.view))
 const focusNodeKey = computed(() => route.query.focus || route.query.focusNode || '')
 const fromSource = computed(() => route.query.from || '')
+const shouldShowRawCompanion = computed(() => (
+  graphMaximized.value
+  && rawCompanionOpen.value
+  && currentView.value === 'reading'
+  && fromSource.value === 'registry'
+  && Boolean(focusNodeKey.value)
+  && Boolean(props.project?.project_id)
+))
+const routeRawFocusTarget = computed(() => buildRawFocusTargetFromFocusKey(focusNodeKey.value))
+const effectiveRawFocusTarget = computed(() => rawFocusTarget.value || routeRawFocusTarget.value)
+
+function firstQueryValue(value) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function isSourceArticleFocusRoute(query) {
+  const source = firstQueryValue(query?.from)
+  const focus = firstQueryValue(query?.focus || query?.focusNode)
+  return source === 'registry' && Boolean(focus)
+}
+
+function buildRawFocusTargetFromFocusKey(focusKey) {
+  const raw = firstQueryValue(focusKey)
+  if (!raw) return null
+  const normalized = String(raw).replace(/\+/g, ' ')
+  const parts = normalized.split(':')
+  const name = parts.length > 1 ? parts.slice(1).join(':') : normalized
+  const label = parts.length > 1 ? parts[0] : ''
+  return {
+    nodeKey: normalized,
+    name,
+    labels: label ? [label] : [],
+  }
+}
+
+function handleGraphNodeSelect(selection) {
+  if (!selection) return
+  rawFocusTarget.value = {
+    nodeKey: selection.key || '',
+    uuid: selection.uuid || '',
+    name: selection.name || '',
+    labels: selection.labels || [],
+    readingSectionLabel: selection.readingSectionLabel || '',
+    quote: selection.quote || selection.data?.source_quote || selection.data?.attributes?.source_quote || '',
+    context: selection.context || selection.data?.source_context || selection.data?.attributes?.source_context || '',
+    summary: selection.summary || '',
+  }
+}
+
+watch(focusNodeKey, () => {
+  rawCompanionOpen.value = true
+  rawFocusTarget.value = null
+})
+
+async function toggleGraphMaximized() {
+  graphMaximized.value = !graphMaximized.value
+  await nextTick()
+  window.dispatchEvent(new Event('resize'))
+}
 
 function handleViewChange(nextView) {
   const normalized = normalizeGraphPanelView(nextView)
@@ -319,9 +446,94 @@ const failureSuccessRatio = computed(() => {
   overflow: hidden;
   display: flex;
 }
+.graph-wrapper--maximized {
+  position: fixed;
+  inset: 16px;
+  z-index: 1200;
+  min-height: 0;
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(20, 30, 50, 0.28);
+}
 .graph-wrapper > :deep(.graph-panel) {
   flex: 1;
   min-width: 0;
+}
+.article-maximized-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.article-maximized-graph {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.article-maximized-graph > :deep(.graph-panel) {
+  flex: 1;
+  min-width: 0;
+}
+.article-maximized-raw {
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.raw-companion-head {
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.raw-companion-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.raw-companion-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+.raw-companion-close:hover {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+}
+.article-maximized-raw > :deep(.article-raw-wrap) {
+  padding: 12px;
+}
+.article-maximized-raw :deep(.raw-meta) {
+  border-radius: 8px;
+}
+.article-maximized-raw :deep(.raw-body) {
+  border-radius: 8px;
+  padding: 14px 18px 18px;
+}
+
+@media (max-width: 980px) {
+  .article-maximized-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 58fr) minmax(260px, 42fr);
+  }
+  .article-maximized-raw {
+    border-left: none;
+    border-top: 1px solid var(--border-default);
+  }
 }
 
 /* Empty state */

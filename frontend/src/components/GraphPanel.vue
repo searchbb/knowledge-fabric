@@ -99,9 +99,9 @@
             </div>
 
             <div class="detail-section">
-              <div class="section-title">Schema</div>
+              <div class="section-title">图谱类型</div>
               <div class="detail-row">
-                <span class="detail-label">Type:</span>
+                <span class="detail-label">类型：</span>
                 <span class="detail-value">
                   <span class="schema-pill" :class="`status-${selectedItem.schemaStatus}`">
                     {{ selectedItem.entityTypeLabel }}
@@ -109,11 +109,11 @@
                 </span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">Status:</span>
+                <span class="detail-label">状态：</span>
                 <span class="detail-value">{{ selectedItem.schemaStatusLabel }}</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">Raw Labels:</span>
+                <span class="detail-label">原始标签：</span>
                 <span class="detail-value">
                   <span v-if="selectedItem.rawLabels && selectedItem.rawLabels.length">
                     {{ selectedItem.rawLabels.join(', ') }}
@@ -370,7 +370,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['refresh', 'toggle-maximize', 'view-change'])
+const emit = defineEmits(['refresh', 'toggle-maximize', 'view-change', 'node-select'])
 
 const UNCLASSIFIED_NODE_TYPE = 'Unclassified'
 const DEFAULT_NODE_LABELS = new Set(['Entity', 'Node', '__Entity__'])
@@ -934,16 +934,75 @@ const formatDateTime = (dateStr) => {
   }
 }
 
+const measureSvgTextBox = (textEl, fallbackText = '') => {
+  if (textEl && typeof textEl.getBBox === 'function') {
+    return textEl.getBBox()
+  }
+  const text = String(textEl?.textContent || fallbackText || '')
+  return {
+    width: Math.max(text.length * 6, 12),
+    height: 12,
+  }
+}
+
 const closeDetailPanel = () => {
   selectedItem.value = null
   registryLookup.value = null
   expandedSelfLoops.value = new Set() // 重置展开状态
 }
 
+function resolveReadingSectionLabel(rawNode, displayType) {
+  if (!rawNode) return ''
+  const rs = props.readingStructure
+  const groupTitles = rs?.group_titles || rs?.groupTitles || {}
+  if (displayType && groupTitles[displayType]) {
+    return groupTitles[displayType]
+  }
+  if (displayType && READING_GROUP_META[displayType]?.title) {
+    return READING_GROUP_META[displayType].title
+  }
+  const nodeName = String(rawNode.name || '').trim().toLowerCase()
+  if (!rs || nodeName.length < 2) return ''
+  for (const [section, label] of [['problem', '核心问题'], ['solution', '核心方案'], ['architecture', '结构路径']]) {
+    const sData = rs[section]
+    if (!sData) continue
+    const summary = String(typeof sData === 'string' ? sData : sData.summary || '').toLowerCase()
+    if (summary.includes(nodeName)) {
+      return label
+    }
+  }
+  return ''
+}
+
+function buildNodeSelection(item) {
+  if (!item || item.type !== 'node') return null
+  const rawNode = item.data || {}
+  const labels = Array.isArray(rawNode.labels) ? rawNode.labels : []
+  const cleanLabels = labels.filter(label => !DEFAULT_NODE_LABELS.has(label))
+  const type = item.entityType || cleanLabels[0] || ''
+  const name = rawNode.name || ''
+  return {
+    key: type && name ? `${type}:${name}` : (rawNode.uuid || name),
+    uuid: rawNode.uuid || '',
+    name,
+    labels: cleanLabels.length ? cleanLabels : labels,
+    readingSectionLabel: resolveReadingSectionLabel(rawNode, type),
+    summary: rawNode.summary || rawNode.attributes?.summary || '',
+    data: rawNode,
+  }
+}
+
 // Phase C: Registry lookup for selected node
 const route = useRoute()
 const registryLookup = ref(null)
 const registryLookupLoading = ref(false)
+
+watch(selectedItem, (item) => {
+  const selection = buildNodeSelection(item)
+  if (selection) {
+    emit('node-select', selection)
+  }
+}, { flush: 'post' })
 
 watch(selectedItem, async (item) => {
   registryLookup.value = null
@@ -2093,7 +2152,7 @@ const renderForceGraph = () => {
     linkLabelBg.each(function(d, i) {
       const mid = getLinkMidpoint(d)
       const textEl = linkLabels.nodes()[i]
-      const bbox = textEl.getBBox()
+      const bbox = measureSvgTextBox(textEl, d.relation || d.name || '')
       d3.select(this)
         .attr('x', mid.x - bbox.width / 2 - 4)
         .attr('y', mid.y - bbox.height / 2 - 2)
@@ -2320,7 +2379,7 @@ const renderReadingGraph = () => {
     .style('pointer-events', 'none')
 
   linkLabels.each(function(item, index) {
-    const bbox = this.getBBox()
+    const bbox = measureSvgTextBox(this, item.name)
     d3.select(linkLabelBg.nodes()[index])
       .attr('x', item.x - bbox.width / 2 - 5)
       .attr('y', item.y - bbox.height / 2 - 3)
@@ -2539,14 +2598,15 @@ const focusNodeSection = ref('')
 const focusNodeDisplayName = computed(() => {
   if (!props.focusNodeKey) return ''
   // concept_key format: "Type:name"
-  const parts = props.focusNodeKey.split(':')
-  return parts.length > 1 ? parts.slice(1).join(':') : props.focusNodeKey
+  const normalizedKey = String(props.focusNodeKey).replace(/\+/g, ' ')
+  const parts = normalizedKey.split(':')
+  return parts.length > 1 ? parts.slice(1).join(':') : normalizedKey
 })
 
 function tryAutoFocusFromRoute() {
   if (!props.focusNodeKey || !props.graphData?.nodes?.length) return
 
-  const conceptKey = props.focusNodeKey // e.g. "Technology:虚幻引擎5"
+  const conceptKey = String(props.focusNodeKey).replace(/\+/g, ' ') // e.g. "Technology:虚幻引擎5"
   const parts = conceptKey.split(':')
   const targetType = parts.length > 1 ? parts[0] : ''
   const targetName = parts.length > 1 ? parts.slice(1).join(':') : conceptKey
@@ -2629,6 +2689,9 @@ function tryAutoFocusFromRoute() {
           }
         }
       }
+    }
+    if (!focusNodeSection.value) {
+      focusNodeSection.value = resolveReadingSectionLabel(found, entityType)
     }
 
     // Visual highlight + zoom to node in reading graph

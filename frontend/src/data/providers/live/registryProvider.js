@@ -4,6 +4,7 @@
 import {
   listRegistryConcepts as apiListRegistryConcepts,
   getRegistryConcept as apiGetRegistryConcept,
+  getRegistryConceptGraph as apiGetRegistryConceptGraph,
   listCrossRelations as apiListCrossRelations,
   getCrossRelation as apiGetCrossRelation,
   getCrossRelationCounts as apiGetCrossRelationCounts,
@@ -15,6 +16,10 @@ export function listRegistryConcepts(conceptType) {
 
 export function getRegistryConcept(entryId) {
   return apiGetRegistryConcept(entryId)
+}
+
+export function getRegistryConceptGraph(entryId) {
+  return apiGetRegistryConceptGraph(entryId)
 }
 
 export function listCrossRelations(params = {}) {

@@ -31,6 +31,7 @@
   --bg-canvas:        #ffffff;
   --bg-surface:       var(--color-ivory-50);
   --bg-surface-2:     var(--color-ivory-100);
+  --bg-base:          var(--color-ivory-100);
   --bg-elevated:      #ffffff;
   --bg-muted:         rgba(255, 235, 200, 0.55);
   --bg-selected:      linear-gradient(180deg, #fff3df 0%, #fffaf1 100%);
@@ -54,8 +55,24 @@
   --focus-ring:            rgba(191, 125, 40, 0.35);
 
   /* ============ Semantic · State ============ */
+  --state-linked:     #2f6f9f;
+  --state-candidate:  #b7791f;
+  --state-derived:    #4f7d2a;
+  --state-current-project: #6b46a3;
+  --state-ignored:    #9ca3af;
   --state-warning:    #c78a2a;
+  --state-readonly:   #64748b;
   --state-danger:     #c0392b;
+
+  /* ============ KFC Workbench · Archive Surface ============ */
+  --kfc-bg:           var(--bg-app);
+  --kfc-surface:      var(--bg-surface);
+  --kfc-surface-muted: var(--bg-surface-2);
+  --kfc-border:       var(--border-default);
+  --kfc-text:         var(--text-primary);
+  --kfc-text-muted:   var(--text-muted);
+  --kfc-primary:      var(--accent-primary);
+  --kfc-primary-hover: var(--accent-primary-hover);
 
   /* ============ Semantic · Input ============ */
   --input-bg:         #ffffff;

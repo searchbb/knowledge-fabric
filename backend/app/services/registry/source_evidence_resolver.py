@@ -27,6 +27,8 @@ plausible-looking fake. Callers must propagate that flag to the UI.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -86,6 +88,48 @@ def _resolve_project_graph_id(project_id: str) -> str:
     return getattr(project, "graph_id", "") or ""
 
 
+def _resolve_project_name(project_id: str) -> str:
+    project = ProjectManager.get_project(project_id)
+    return str(getattr(project, "name", "") or "") if project else ""
+
+
+def _project_source_file_paths(project_id: str) -> list[str]:
+    project = ProjectManager.get_project(project_id)
+    if not project:
+        return []
+    paths: list[str] = []
+    for file_info in getattr(project, "files", None) or []:
+        if not isinstance(file_info, dict):
+            continue
+        for key in ("source_md_path", "path"):
+            path = str(file_info.get(key) or "").strip()
+            if path and path not in paths:
+                paths.append(path)
+    return paths
+
+
+def _load_project_source_text(project_id: str) -> tuple[str, str]:
+    """Return best available source text plus its filesystem path.
+
+    Prefer the saved Markdown file because it preserves headings around the
+    quote. Fall back to ``extracted_text.txt`` so legacy/imported projects still
+    get a readable context without re-running extraction.
+    """
+    for path in _project_source_file_paths(project_id):
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            return open(path, "r", encoding="utf-8").read(), path
+        except OSError:
+            continue
+
+    text = ProjectManager.get_extracted_text(project_id) or ""
+    if text:
+        text_path = os.path.join(ProjectManager.PROJECTS_DIR, project_id, "extracted_text.txt")
+        return text, text_path
+    return "", ""
+
+
 def _normalize_for_match(value: str) -> str:
     """Project-wide concept_key normalizer matches the ingestion pipeline.
 
@@ -95,6 +139,73 @@ def _normalize_for_match(value: str) -> str:
     the label check still separates ``Topic:agent`` from ``Solution:agent``.
     """
     return (value or "").strip().lower()
+
+
+def _clean_text_line(value: str) -> str:
+    cleaned = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", value or "")
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"[*_`>#]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _clip_text(value: str, limit: int) -> str:
+    value = _clean_text_line(value)
+    if len(value) <= limit:
+        return value
+    return value[: max(limit - 1, 0)].rstrip() + "…"
+
+
+def _find_text_window(text: str, search_terms: list[str]) -> tuple[str, str]:
+    """Find a source quote and nearby context in raw article text.
+
+    The graph node summary is LLM-derived support. This helper recovers a
+    closer-to-original quote from the saved article by matching the concept
+    name or its meaningful tokens, then returns nearby non-empty lines as
+    context. Empty tuple means no trustworthy text match.
+    """
+    if not text:
+        return "", ""
+
+    terms = []
+    for term in search_terms:
+        term = _clean_text_line(term)
+        if term and term.lower() not in {t.lower() for t in terms}:
+            terms.append(term)
+
+    lines = [_clean_text_line(line) for line in text.splitlines()]
+    non_empty_indexes = [idx for idx, line in enumerate(lines) if line]
+    if not terms or not non_empty_indexes:
+        return "", ""
+
+    def _score(line: str) -> int:
+        lowered = line.lower()
+        score = 0
+        for term in terms:
+            lower_term = term.lower()
+            if lower_term and lower_term in lowered:
+                score = max(score, 100 + len(lower_term))
+            else:
+                for token in re.findall(r"[\w\u4e00-\u9fff]{2,}", lower_term):
+                    if token in lowered:
+                        score = max(score, 10 + len(token))
+        return score
+
+    best_idx = -1
+    best_score = 0
+    for idx in non_empty_indexes:
+        score = _score(lines[idx])
+        if score > best_score:
+            best_idx = idx
+            best_score = score
+
+    if best_idx < 0:
+        return "", ""
+
+    quote = _clip_text(lines[best_idx], 260)
+    window_indexes = [idx for idx in non_empty_indexes if best_idx - 3 <= idx <= best_idx + 3]
+    context = _clip_text(" ".join(lines[idx] for idx in window_indexes), 700)
+    return quote, context
 
 
 def _find_node(graph_data: dict[str, Any], label: str, name: str) -> dict[str, Any] | None:
@@ -193,6 +304,11 @@ def build_source_ref(
         "concept_key": concept_key,
         "source_node_uuid": "",
         "source_text": "",
+        "source_excerpt": "",
+        "source_context": "",
+        "source_article_id": project_id,
+        "source_article_title": project_name,
+        "source_markdown_path": "",
         "group_label": label,
         "group_title": "",
         "degraded": False,
@@ -216,6 +332,10 @@ def build_source_ref(
         ref["degraded_reason"] = f"project {project_id} has no graph_id"
         return ref
 
+    if not ref["project_name"]:
+        ref["project_name"] = _resolve_project_name(project_id)
+        ref["source_article_title"] = ref["project_name"]
+
     graph_data = cache.get_or_load(graph_id)
     if not graph_data or not (graph_data.get("nodes") or []):
         ref["degraded"] = True
@@ -233,6 +353,14 @@ def build_source_ref(
     summary = str(node.get("summary") or "").strip()
     ref["source_node_uuid"] = str(node.get("uuid") or "")
     ref["source_text"] = summary
+    article_text, source_path = _load_project_source_text(project_id)
+    source_excerpt, source_context = _find_text_window(
+        article_text,
+        [name, concept_key, summary],
+    )
+    ref["source_excerpt"] = source_excerpt or summary
+    ref["source_context"] = source_context or summary
+    ref["source_markdown_path"] = source_path
     # Prefer the node's own label when we can read the graph — that's
     # authoritative vs. the concept_key prefix which might have drifted.
     node_labels = [str(l or "").strip() for l in (node.get("labels") or []) if l]
@@ -240,7 +368,7 @@ def build_source_ref(
         ref["group_label"] = node_labels[0]
         if group_titles.get(node_labels[0]):
             ref["group_title"] = group_titles[node_labels[0]]
-    if not summary:
+    if not summary and not ref["source_excerpt"]:
         ref["degraded"] = True
         ref["degraded_reason"] = "matched node has empty summary"
     return ref
@@ -265,6 +393,36 @@ def resolve_source_evidence(
     entry_id = entry.get("entry_id", "")
     links = entry.get("source_links") or []
     refs: list[dict[str, Any]] = []
+    if not links and (
+        entry.get("source_quote")
+        or entry.get("source_excerpt")
+        or entry.get("source_context")
+        or entry.get("source_article_id")
+    ):
+        refs.append(
+            {
+                "entry_id": entry_id,
+                "source_concept_id": entry_id,
+                "project_id": (entry.get("linked_research_project_ids") or [""])[0],
+                "project_name": "",
+                "concept_key": entry.get("canonical_name") or entry.get("label") or "",
+                "source_node_uuid": "",
+                "source_text": entry.get("source_quote") or entry.get("source_excerpt") or entry.get("source_context") or "",
+                "source_excerpt": entry.get("source_excerpt") or entry.get("source_quote") or "",
+                "source_context": entry.get("source_context") or entry.get("source_quote") or "",
+                "source_article_id": entry.get("source_article_id", ""),
+                "source_article_title": entry.get("source_article_title", ""),
+                "source_markdown_path": entry.get("source_markdown_path", ""),
+                "source_content_hash": entry.get("source_content_hash", ""),
+                "source_material_slice_id": entry.get("source_material_slice_id", ""),
+                "source_lead_id": entry.get("source_lead_id", ""),
+                "group_label": "",
+                "group_title": "",
+                "degraded": False,
+                "resolved_from": "kfc_concept_provenance",
+            }
+        )
+        return refs[:max_refs]
     for link in links:
         if not isinstance(link, dict):
             continue

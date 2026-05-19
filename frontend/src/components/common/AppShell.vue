@@ -10,6 +10,7 @@
           <slot name="topbar-actions" />
         </template>
       </AppTopBar>
+      <CurrentResearchProjectBar />
       <main class="app-content">
         <slot />
       </main>
@@ -22,6 +23,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import AppSidebar from './AppSidebar.vue'
 import AppTopBar from './AppTopBar.vue'
+import CurrentResearchProjectBar from './CurrentResearchProjectBar.vue'
 
 const props = defineProps({
   crumbs: {

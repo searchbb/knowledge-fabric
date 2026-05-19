@@ -7,45 +7,61 @@
  */
 
 html[data-theme="sepia-archive"] {
-  --bg-app:           #ebdcba;
-  --bg-app-gradient:  radial-gradient(circle at top right, rgba(138, 90, 68, 0.12), transparent 32%),
-                      linear-gradient(180deg, #ebdcba 0%, #f3e8cf 32%, #faf2de 100%);
-  --bg-canvas:        #fbf6ea;
-  --bg-surface:       #f6eedc;
-  --bg-surface-2:     #f1e5c9;
-  --bg-elevated:      #fbf6ea;
-  --bg-muted:         rgba(138, 90, 68, 0.10);
-  --bg-selected:      linear-gradient(180deg, #ecdaa9 0%, #f3e8cf 100%);
+  --bg-app:           #f7f1e3;
+  --bg-app-gradient:  radial-gradient(circle at top right, rgba(139, 94, 60, 0.08), transparent 30%),
+                      linear-gradient(180deg, #f7f1e3 0%, #fbf5e8 38%, #fffdf7 100%);
+  --bg-canvas:        #fffdf7;
+  --bg-surface:       #fffdf7;
+  --bg-surface-2:     #fbf5e8;
+  --bg-base:          #fbf5e8;
+  --bg-elevated:      #fffdf7;
+  --bg-muted:         rgba(139, 94, 60, 0.08);
+  --bg-selected:      linear-gradient(180deg, #fffdf7 0%, #f4e7d2 100%);
 
-  --text-primary:     #4b3a2a;
-  --text-secondary:   #7a6855;
-  --text-muted:       #a08a70;
-  --text-on-accent:   #fbf6ea;
+  --text-primary:     #3f342a;
+  --text-secondary:   #6f604f;
+  --text-muted:       #8a7a66;
+  --text-on-accent:   #fffdf7;
 
-  --border-default:   #d6c39a;
-  --border-strong:    #c9b48a;
-  --border-muted:     #e3d4ac;
+  --border-default:   #e3d2b2;
+  --border-strong:    #d9c49a;
+  --border-muted:     #eadfc7;
 
-  --accent-primary:        #8a5a44;
-  --accent-primary-hover:  #6e4330;
-  --accent-soft:           rgba(138, 90, 68, 0.14);
-  --accent-group-label:    #7a5538;
-  --focus-ring:            rgba(138, 90, 68, 0.40);
+  --accent-primary:        #8b5e3c;
+  --accent-primary-hover:  #74492e;
+  --accent-soft:           rgba(139, 94, 60, 0.13);
+  --accent-group-label:    #74492e;
+  --focus-ring:            rgba(139, 94, 60, 0.38);
 
-  --state-warning:    #b07a2c;
+  --state-linked:     #2f6f9f;
+  --state-candidate:  #b7791f;
+  --state-derived:    #4f7d2a;
+  --state-current-project: #6b46a3;
+  --state-ignored:    #9ca3af;
+  --state-warning:    #c05621;
+  --state-readonly:   #64748b;
   --state-danger:     #a24030;
 
-  --input-bg:         #fbf6ea;
-  --input-border:     #d6c39a;
-  --input-border-focus: #8a5a44;
+  --kfc-bg:           #f7f1e3;
+  --kfc-surface:      #fffdf7;
+  --kfc-surface-muted: #fbf5e8;
+  --kfc-border:       #e3d2b2;
+  --kfc-text:         #3f342a;
+  --kfc-text-muted:   #8a7a66;
+  --kfc-primary:      #8b5e3c;
+  --kfc-primary-hover: #74492e;
+
+  --input-bg:         #fffdf7;
+  --input-border:     #e3d2b2;
+  --input-border-focus: #8b5e3c;
 
   /* 档案阅读:纸面是奶油旧白,字深棕,强调用青褐 */
-  --reading-paper:        #fbf6ea;
-  --reading-ink:          #3b2e21;
+  --reading-paper:        #fffdf7;
+  --reading-ink:          #3f342a;
   --reading-quote-bar:    #5f7a6b;
-  --reading-code-bg:      #f1e5c9;
-  --reading-code-border:  #d6c39a;
-  --reading-highlight-bg: rgba(201, 180, 138, 0.45);
+  --reading-code-bg:      #fbf5e8;
+  --reading-code-border:  #e3d2b2;
+  --reading-highlight-bg: rgba(217, 196, 154, 0.36);
   --reading-annotate:     #5f7a6b;
   --reading-divider:      #d6c39a;
   /* 档案主题下代码块用深棕黑(跟纸面的奶油色差形成"墨迹"感) */

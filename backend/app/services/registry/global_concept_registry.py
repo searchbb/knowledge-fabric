@@ -307,6 +307,27 @@ def search_entries(query: str, *, limit: int = 20) -> list[dict[str, Any]]:
                 best_alias_score = max(best_alias_score, 0.6)
         if best_alias_score > 0:
             scored.append((best_alias_score, entry))
+            continue
+
+        source_text = " ".join(
+            str(entry.get(key) or "")
+            for key in (
+                "description",
+                "definition",
+                "source_quote",
+                "source_excerpt",
+                "source_context",
+                "source_article_title",
+                "source_article_id",
+                "source_markdown_path",
+                "source_content_hash",
+                "digest_input_text",
+                "digested_text",
+            )
+        )
+        norm_source = normalize_concept_name(source_text)
+        if norm_query in norm_source:
+            scored.append((0.45, entry))
 
     scored.sort(key=lambda pair: (-pair[0], pair[1]["canonical_name"].lower()))
     return [entry for _, entry in scored[:limit]]

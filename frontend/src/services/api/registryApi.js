@@ -11,6 +11,22 @@ export function getRegistryConcept(entryId) {
   return service({ url: `/api/registry/concepts/${entryId}`, method: 'get' })
 }
 
+export function getRegistryConceptGraph(entryId) {
+  return service({ url: `/api/registry/concepts/${entryId}/graph`, method: 'get' })
+}
+
+export function createRegistryConceptGraphSnapshot(entryId, payload = {}) {
+  return service({ url: `/api/registry/concepts/${entryId}/graph/snapshot`, method: 'post', data: payload })
+}
+
+export function createRegistryConceptGraphificationRequest(entryId, payload = {}) {
+  return service({ url: `/api/registry/concepts/${entryId}/graphification-requests`, method: 'post', data: payload })
+}
+
+export function getKfcMaterialGraph(graphId) {
+  return service({ url: `/api/kfc/material-graphs/${graphId}`, method: 'get' })
+}
+
 export function createRegistryConcept({ canonical_name, concept_type, aliases, description }) {
   return service({
     url: '/api/registry/concepts',

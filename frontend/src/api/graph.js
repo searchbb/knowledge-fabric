@@ -50,10 +50,11 @@ export function getTaskStatus(taskId) {
  * @param {String} graphId - 图谱ID
  * @returns {Promise}
  */
-export function getGraphData(graphId) {
+export function getGraphData(graphId, config = {}) {
   return service({
     url: `/api/graph/data/${graphId}`,
-    method: 'get'
+    method: 'get',
+    ...config,
   })
 }
 

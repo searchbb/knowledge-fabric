@@ -51,7 +51,7 @@
     <article class="action-card">
       <div class="card-title">运行待处理</div>
       <p class="section-copy mini-copy">
-        同步触发一次 drain。每个 URL 有独立的 20 分钟总超时 + 4 分钟无进度保护，卡住的 URL 会被自动 cancel 并标为失败，不阻塞后续。
+        同步触发一次 drain。每个 URL 有独立的 60 分钟总超时 + 4 分钟无进度保护，卡住的 URL 会被自动 cancel 并标为失败，不阻塞后续。
       </p>
       <div class="action-row">
         <button
@@ -81,8 +81,15 @@
         </div>
       </div>
       <div v-else-if="hasInFlightDrain" class="live-progress live-progress--waiting">
-        <span class="live-dot" aria-hidden="true"></span>
-        正在初始化...（稍等几秒就会显示实时进度）
+        <div class="live-topline">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span class="live-label">{{ activeRunPhaseLabel }}</span>
+          <span v-if="currentInFlightItem?.last_heartbeat_at" class="live-percent live-percent--small">
+            {{ heartbeatLabel(currentInFlightItem.last_heartbeat_at) }}
+          </span>
+        </div>
+        <div v-if="inFlightUrl" class="live-url">{{ inFlightUrl }}</div>
+        <div class="live-message">{{ activeRunFallbackMessage }}</div>
       </div>
 
       <CollapsibleCard
@@ -747,10 +754,43 @@ const displayBuckets = computed(() => {
 // happening" even though the backend is busy.
 const hasInFlightDrain = computed(() => buckets.value.in_flight.length > 0)
 
+const currentInFlightItem = computed(() => buckets.value.in_flight[0] || null)
+
 // Show which URL is currently being processed in the live-progress panel.
 const inFlightUrl = computed(() => {
-  const item = buckets.value.in_flight[0]
+  const item = currentInFlightItem.value
   return item?.url || item?.md_path || null
+})
+
+function autoPhaseLabel(phase) {
+  const map = {
+    fetch: '抓取文章',
+    verify: '校验内容',
+    ontology: '生成本体',
+    build: '构建图谱',
+    build_extract: '抽取图谱',
+    build_verify: '校验图谱',
+    post_build: '图谱后处理',
+    concept: '概念审核',
+    registry: '写入概念库',
+    theme: '主题归类',
+    discover: '关系发现',
+    summarize: '摘要回填',
+    done: '完成',
+  }
+  return map[phase] || phase || '排队执行'
+}
+
+const activeRunPhaseLabel = computed(() =>
+  autoPhaseLabel(currentInFlightItem.value?.phase),
+)
+
+const activeRunFallbackMessage = computed(() => {
+  const item = currentInFlightItem.value
+  const label = autoPhaseLabel(item?.phase)
+  const elapsed = elapsedSince(item?.claimed_at)
+  const prefix = elapsed ? `已跑 ${elapsed}` : '正在执行'
+  return `${prefix}，当前阶段：${label}。图谱实时任务已结束或暂不可见，队列心跳仍在更新。`
 })
 
 function itemKey(item) {
@@ -1686,9 +1726,6 @@ watch(appMode, async () => {
   color: #4c1d95;
 }
 .live-progress--waiting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   font-size: 13px;
 }
 .live-topline {
@@ -1718,6 +1755,9 @@ watch(appMode, async () => {
   margin-left: auto;
   font-weight: 700;
   font-size: 16px;
+}
+.live-percent--small {
+  font-size: 12px;
 }
 .live-bar-track {
   height: 6px;

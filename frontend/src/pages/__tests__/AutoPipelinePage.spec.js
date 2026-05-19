@@ -84,6 +84,40 @@ describe('AutoPipelinePage', () => {
     expect(wrapper.text()).toContain('live.example.com/a')
   })
 
+  it('shows the current in-flight phase when graph task progress is unavailable', async () => {
+    serviceMock.mockImplementation(
+      makeMockRouter({
+        'get /api/auto/pending-urls': {
+          data: {
+            pending: [],
+            in_flight: [
+              {
+                url: 'https://mp.weixin.qq.com/s/q87KsXMyxviuO23gnAmhhg',
+                run_id: 'auto_run_1f3ecd78d3',
+                phase: 'theme',
+                claimed_at: '2026-05-18T13:05:50',
+                last_heartbeat_at: new Date().toISOString(),
+                url_fingerprint: '//mp.weixin.qq.com/s/q87KsXMyxviuO23gnAmhhg',
+              },
+            ],
+            processed: [],
+            errored: [],
+          },
+        },
+        'get /api/graph/tasks': { data: [] },
+      }),
+    )
+
+    const wrapper = mount(AutoPipelinePage, {
+      global: { mocks: { $route: { fullPath: '/workspace/auto' } } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('主题归类')
+    expect(wrapper.text()).toContain('队列心跳仍在更新')
+    expect(wrapper.text()).not.toContain('正在初始化')
+  })
+
   it('renders NotePasteCard below the URL input', async () => {
     const wrapper = mount(AutoPipelinePage, {
       global: { mocks: { $route: { fullPath: '/workspace/auto' } } },

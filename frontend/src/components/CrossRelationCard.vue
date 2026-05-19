@@ -8,7 +8,26 @@
         <span class="xrel-concept-name target" @click="$emit('navigate', otherEntryId)">
           {{ otherName }}
         </span>
-        <span class="xrel-article-tag">{{ targetArticle }}</span>
+        <a
+          v-if="targetArticle && targetProjectId"
+          class="xrel-article-tag"
+          :href="articleGraphHref(targetProjectId, targetConceptKey)"
+          target="_blank"
+          rel="noopener noreferrer"
+          :title="`打开相邻概念来源文章：${targetArticle}`"
+          :aria-label="`打开相邻概念来源文章：${targetArticle}`"
+          @click.stop
+        >
+          来源文章《{{ targetArticle }}》
+        </a>
+        <span
+          v-else-if="targetArticle"
+          class="xrel-article-tag"
+          :title="`相邻概念的来源文章：${targetArticle}`"
+          :aria-label="`相邻概念的来源文章：${targetArticle}`"
+        >
+          来源文章《{{ targetArticle }}》
+        </span>
       </div>
       <span class="xrel-type-badge" :class="relation.relation_type">
         {{ typeLabel }}
@@ -52,7 +71,7 @@
           </div>
           <p class="xrel-ref-text">{{ ref.source_text }}</p>
           <a v-if="ref.project_id"
-             :href="`/process/${ref.project_id}?mode=graph&view=reading&focusNode=${encodeURIComponent(ref.concept_key)}&from=registry`"
+             :href="articleGraphHref(ref.project_id, ref.concept_key)"
              target="_blank"
              class="xrel-ref-jump"
           >跳至该文章图谱 ↗</a>
@@ -93,10 +112,30 @@
       </div>
 
       <div class="xrel-article-link" v-if="targetProjectId">
-        <a :href="`/process/${targetProjectId}?mode=graph&view=reading&focusNode=${encodeURIComponent(targetConceptKey)}&from=registry`"
+        <a :href="articleGraphHref(targetProjectId, targetConceptKey)"
            target="_blank" class="btn-xrel btn-primary">
           看来源文章 ↗
         </a>
+      </div>
+
+      <div class="xrel-type-editor">
+        <label>
+          <span class="xrel-label">关系类型</span>
+          <select v-model="selectedType" class="xrel-type-select">
+            <option v-for="option in relationTypeOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <button
+          class="btn-xrel"
+          type="button"
+          :disabled="selectedType === relation.relation_type"
+          @click="saveType"
+        >
+          保存类型
+        </button>
+        <span v-if="typeSaveMessage" class="xrel-save-note">{{ typeSaveMessage }}</span>
       </div>
 
       <div class="xrel-review-actions">
@@ -118,6 +157,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { buildArticleGraphHref } from '../utils/articleGraphRoute'
 
 const props = defineProps({
   relation: { type: Object, required: true },
@@ -125,11 +165,22 @@ const props = defineProps({
   currentEntryId: { type: String, default: '' },  // the concept currently being viewed
 })
 
-defineEmits(['navigate', 'review', 'delete'])
+const emit = defineEmits(['navigate', 'review', 'delete', 'type-change'])
 
 const isExpanded = ref(false)
+const selectedType = ref(props.relation.relation_type)
+const typeSaveMessage = ref('')
 
 const TYPE_LABELS = {
+  related_to: '相关',
+  supports: '支撑',
+  contradicts: '矛盾',
+  refines: '细化',
+  depends_on: '依赖',
+  example_of: '实例',
+  causes: '导致',
+  compares_with: '对比',
+  derived_from: '来源',
   design_inspiration: '设计启示',
   technical_foundation: '技术支撑',
   problem_solution: '问题-方案',
@@ -137,6 +188,24 @@ const TYPE_LABELS = {
   capability_constraint: '能力约束',
   pattern_reuse: '模式借鉴',
 }
+
+const relationTypeOptions = [
+  'related_to',
+  'supports',
+  'contradicts',
+  'refines',
+  'depends_on',
+  'example_of',
+  'causes',
+  'compares_with',
+  'derived_from',
+  'design_inspiration',
+  'technical_foundation',
+  'problem_solution',
+  'contrast_reference',
+  'capability_constraint',
+  'pattern_reuse',
+].map((value) => ({ value, label: TYPE_LABELS[value] || value }))
 
 const REVIEW_LABELS = {
   unreviewed: '待审阅',
@@ -212,6 +281,15 @@ const legacyQuotes = computed(() => allRefs.value.filter(
 const legacyQuoteOnly = computed(
   () => legacyQuotes.value.length > 0 && sourceTextRefs.value.length === 0
 )
+
+function articleGraphHref(projectId, conceptKey) {
+  return buildArticleGraphHref(projectId, conceptKey, { from: 'registry' })
+}
+
+function saveType() {
+  typeSaveMessage.value = '关系类型已更新'
+  emit('type-change', props.relation.relation_id, selectedType.value)
+}
 </script>
 
 <style scoped>
@@ -232,7 +310,24 @@ const legacyQuoteOnly = computed(
 .xrel-concept-name.target { color: #4a6fa5; cursor: pointer; }
 .xrel-concept-name.target:hover { text-decoration: underline; }
 .xrel-arrow { color: #9ca3af; font-size: 14px; }
-.xrel-article-tag { font-size: 11px; color: #6b7280; background: #f3f4f6; padding: 1px 6px; border-radius: 4px; }
+.xrel-article-tag {
+  display: inline-block;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-decoration: none;
+}
+.xrel-article-tag[href]:hover {
+  color: #4a6fa5;
+  background: #e8eef8;
+  text-decoration: underline;
+}
 
 .xrel-type-badge {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
@@ -291,4 +386,31 @@ const legacyQuoteOnly = computed(
 .xrel-path-sep { color: #9ca3af; }
 .xrel-article-link { margin-bottom: 12px; }
 .xrel-review-actions { display: flex; gap: 8px; margin-top: 8px; }
+.xrel-type-editor {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+.xrel-type-select {
+  display: block;
+  min-width: 180px;
+  margin-top: 4px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: #374151;
+  background: #fff;
+  font-size: 12px;
+}
+.xrel-save-note {
+  color: #059669;
+  font-size: 12px;
+  font-weight: 700;
+}
 </style>

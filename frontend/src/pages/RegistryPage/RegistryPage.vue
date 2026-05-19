@@ -26,8 +26,8 @@
 
       <section class="phase2-page">
         <div class="section-badge">{{ activeTabMeta.badge }}</div>
-        <h2 class="section-title">{{ activeTabMeta.title }}</h2>
-        <p class="section-copy">{{ activeTabMeta.subtitle }}</p>
+        <h2 class="section-title">{{ registryModeTitle }}</h2>
+        <p class="section-copy">{{ registryModeSubtitle }}</p>
 
         <!-- Theme / Evolution / Review tabs -->
         <ThemeTab v-if="activeTab === 'themes'" />
@@ -36,6 +36,120 @@
 
         <!-- Concepts tab (default, existing content below) -->
         <template v-else>
+
+        <div v-if="registryContext.active" class="registry-context-banner">
+          <div>
+            <div class="context-kicker">{{ leadMatchingMode ? '概念线索处理工作台' : '来自文章概念线索' }}</div>
+            <h3>{{ registryContext.query || '未命名线索' }}</h3>
+            <p>
+              当前任务：判断这条文章概念线索如何进入 KFC
+              <template v-if="registryContext.clusterId"> · 主题簇: {{ registryContext.clusterId }}</template>
+              <template v-if="registryContext.projectId"> · 当前研究项目: {{ registryContext.projectId }}</template>
+            </p>
+            <dl v-if="leadMatchingMode" class="context-grid">
+              <div><dt>当前线索</dt><dd>{{ registryContext.query || '未命名线索' }}</dd></div>
+              <div><dt>来源文章</dt><dd>{{ registryContext.articleId || '未携带 article_id' }}</dd></div>
+              <div><dt>主题簇</dt><dd>{{ registryContext.clusterId || '未携带 cluster_id' }}</dd></div>
+              <div><dt>当前研究项目</dt><dd>{{ registryContext.projectId || '未携带 project_id' }}</dd></div>
+              <div><dt>自动匹配结果</dt><dd>{{ autoSelectionMessage || '等待用户选择匹配项' }}</dd></div>
+              <div><dt>当前关联状态</dt><dd>{{ leadAssociationStatus }}</dd></div>
+            </dl>
+            <p v-if="autoSelectionMessage" class="context-selection">{{ autoSelectionMessage }}</p>
+          </div>
+          <div class="context-actions">
+            <router-link
+              v-if="registryContext.clusterId"
+              class="btn-small"
+              :to="`/workspace/topic-clusters/${registryContext.clusterId}`"
+            >返回加工篮</router-link>
+            <router-link
+              v-if="selectedEntry"
+              class="btn-primary compact"
+              :to="conceptWorkbenchRoute(selectedEntry.entry_id)"
+            >打开概念工作台</router-link>
+          </div>
+        </div>
+
+        <section v-if="leadMatchingMode" class="lead-decision-workspace">
+          <div class="decision-hero">
+            <div>
+              <div class="context-kicker">当前任务</div>
+              <h3>你正在处理文章线索：{{ registryContext.query || '未命名线索' }}</h3>
+              <p>
+                系统建议关联到已有概念：
+                <strong>{{ selectedEntry?.canonical_name || '等待选择候选概念' }}</strong>
+              </p>
+              <p class="decision-explain">{{ leadDecisionExplanation }}</p>
+            </div>
+            <div class="decision-status-card" :class="{ done: leadAssociationCompleted }">
+              <span>{{ leadAssociationCompleted ? '已完成' : '待确认' }}</span>
+              <strong>{{ leadAssociationCompleted ? `已关联到 ${selectedEntry?.canonical_name}` : leadAssociationStatus }}</strong>
+              <small>{{ leadAssociationCompleted ? '下一步：打开工作台、返回加工篮，或继续处理下一条线索。' : '请确认、换一个概念、新建概念，或暂不处理。' }}</small>
+            </div>
+          </div>
+
+          <div class="decision-grid">
+            <section class="decision-card decision-actions-card">
+              <div class="subsection-title">你需要做什么</div>
+              <template v-if="leadAssociationCompleted">
+                <div class="completion-callout">
+                  <strong>已完成：该线索已关联到 {{ selectedEntry?.canonical_name }}</strong>
+                  <span>这条 lead 的 promotion 状态已经写回，后续可以在概念工作台查看来源证据。</span>
+                </div>
+                <div class="action-row">
+                  <router-link
+                    v-if="selectedEntry"
+                    class="btn-primary compact"
+                    :to="conceptWorkbenchRoute(selectedEntry.entry_id)"
+                  >打开概念工作台</router-link>
+                  <router-link
+                    v-if="registryContext.clusterId"
+                    class="btn-small"
+                    :to="`/workspace/topic-clusters/${registryContext.clusterId}`"
+                  >返回加工篮</router-link>
+                </div>
+              </template>
+              <template v-else>
+                <div class="action-row vertical">
+                  <button
+                    class="btn-primary"
+                    type="button"
+                    :disabled="leadLinking || !canLinkLeadToSelected"
+                    @click="handleLinkSelectedConcept"
+                  >
+                    {{ leadLinking ? '关联中...' : linkPrimaryLabel }}
+                  </button>
+                  <button class="btn-small" type="button" @click="focusSearchInput">换一个已有概念</button>
+                  <button class="btn-small" type="button" @click="showCreateForm = true">沉淀为新概念</button>
+                  <button class="btn-small" type="button" disabled>暂不处理 / 忽略线索</button>
+                </div>
+                <p class="mini-copy section-copy">如果当前页面没有 promotion_id，只能完成自动选中；请先从加工篮进入再直接关联。</p>
+              </template>
+              <p v-if="leadLinkMessage" class="request-note">{{ leadLinkMessage }}</p>
+            </section>
+
+            <section class="decision-card">
+              <div class="subsection-title">为什么推荐它</div>
+              <dl class="decision-dl">
+                <div><dt>原文线索</dt><dd>{{ registryContext.query || '未命名线索' }}</dd></div>
+                <div><dt>目标概念</dt><dd>{{ selectedEntry?.canonical_name || '尚未选择' }}</dd></div>
+                <div><dt>概念定义</dt><dd>{{ selectedEntry?.description || '该概念暂未补充定义，建议关联后在工作台治理。' }}</dd></div>
+                <div><dt>匹配理由</dt><dd>{{ leadMatchReason }}</dd></div>
+                <div><dt>可能风险</dt><dd>{{ leadMatchRisk }}</dd></div>
+              </dl>
+            </section>
+
+            <section class="decision-card">
+              <div class="subsection-title">关联后 KFC 会增加什么</div>
+              <ul class="bring-in-checklist">
+                <li>这条 source quote 会进入 {{ selectedEntry?.canonical_name || '目标概念' }} 概念工作台。</li>
+                <li>保留 article / slice / lead / promotion 追溯。</li>
+                <li>{{ registryContext.clusterId ? `建立与 主题簇 ${registryContext.clusterId} 的上下文关联。` : '等待补充 主题簇 上下文。' }}</li>
+                <li>{{ filteredCrossRelations.length }} 条跨文关系可继续审查。</li>
+              </ul>
+            </section>
+          </div>
+        </section>
 
         <!-- Error: show FIRST when the backend failed. The stats row and
              toolbar below display "0" / active buttons, so rendering them
@@ -75,6 +189,7 @@
         <!-- Search bar + create button -->
         <div class="toolbar">
           <input
+            ref="searchInputRef"
             class="search-input"
             type="text"
             placeholder="搜索概念名 / 别名..."
@@ -100,6 +215,32 @@
               {{ searchQuery ? '没有匹配的条目' : '注册表为空，使用"新建条目"或"项目推荐"来添加' }}
             </div>
 
+            <div v-if="leadMatchingMode && matchingCandidateGroups.length" class="candidate-list grouped-candidate-list">
+              <section v-for="group in matchingCandidateGroups" :key="group.key" class="candidate-group">
+                <div class="candidate-group-title">{{ group.label }}</div>
+                <button
+                  v-for="entry in group.items"
+                  :key="`${group.key}:${entry.entry_id}`"
+                  type="button"
+                  class="candidate-button"
+                  :class="{ active: entry.entry_id === registryStore.selectedEntryId }"
+                  @click="handleSelectEntry(entry.entry_id)"
+                >
+                  <div class="candidate-topline">
+                    <span class="candidate-name">{{ entry.canonical_name }}</span>
+                    <span class="candidate-status">{{ entry.source_links?.length || 0 }} 链接</span>
+                    <span v-if="registryStore.crossRelationCounts[entry.entry_id]" class="xrel-badge">
+                      {{ registryStore.crossRelationCounts[entry.entry_id] }} 条关系
+                    </span>
+                  </div>
+                  <div class="candidate-meta">
+                    {{ entry.concept_type }}
+                    <template v-if="entry.aliases?.length"> · {{ entry.aliases.length }} 别名</template>
+                  </div>
+                </button>
+              </section>
+            </div>
+
             <div v-else class="candidate-list">
               <button
                 v-for="entry in displayEntries"
@@ -113,7 +254,7 @@
                   <span class="candidate-name">{{ entry.canonical_name }}</span>
                   <span class="candidate-status">{{ entry.source_links?.length || 0 }} 链接</span>
                   <span v-if="registryStore.crossRelationCounts[entry.entry_id]" class="xrel-badge">
-                    x-rel {{ registryStore.crossRelationCounts[entry.entry_id] }}
+                    {{ registryStore.crossRelationCounts[entry.entry_id] }} 条关系
                   </span>
                 </div>
                 <div class="candidate-meta">
@@ -134,13 +275,48 @@
                 </div>
                 <div class="detail-badges">
                   <span class="chip">{{ selectedEntry.concept_type }}</span>
+                  <button
+                    v-if="leadMatchingMode && !leadAssociationCompleted"
+                    class="btn-primary compact"
+                    type="button"
+                    :disabled="leadLinking || !canLinkLeadToSelected"
+                    @click="handleLinkSelectedConcept"
+                  >
+                    {{ leadLinking ? '关联中...' : linkPrimaryLabel }}
+                  </button>
+                  <span v-if="leadMatchingMode && leadAssociationCompleted" class="chip success">已完成关联</span>
                   <router-link
-                    :to="`/workspace/entry/${selectedEntry.entry_id}`"
+                    :to="conceptWorkbenchRoute(selectedEntry.entry_id)"
                     class="open-detail-btn"
-                    title="在独立页查看完整详情（可分享链接）"
-                  >独立页打开 →</router-link>
+                    title="打开完整概念工作台（保留当前线索上下文）"
+                  >打开概念工作台 →</router-link>
                 </div>
               </div>
+
+              <section v-if="leadMatchingMode" class="matching-panel task-explanation-panel">
+                <div class="subsection-title">目标概念摘要</div>
+                <p class="section-copy mini-copy">
+                  {{ selectedEntry.description || '该概念暂无定义。确认关联后，可以在概念工作台补充定义、别名和治理状态。' }}
+                </p>
+                <details class="advanced-filter-details system-explain-details">
+                  <summary>查看系统解释：局部图谱与关系路径</summary>
+                  <div class="local-graph">
+                    <div class="graph-node graph-node--lead">当前文章线索<br />{{ registryContext.query || selectedEntry.canonical_name }}</div>
+                    <div class="graph-node graph-node--concept">正式概念<br />{{ selectedEntry.canonical_name }}</div>
+                    <div class="graph-node graph-node--article">来源文章<br />{{ registryContext.articleId || 'unknown' }}</div>
+                  </div>
+                  <ol class="path-list">
+                    <li v-for="step in leadRelationPath" :key="step">{{ step }}</li>
+                  </ol>
+                  <div class="matching-candidate-actions">
+                    <span v-for="entry in relationRecommendationEntries" :key="entry.entry_id">
+                      {{ entry.canonical_name }} · 可作为后续关系审查候选
+                    </span>
+                    <span v-if="!relationRecommendationEntries.length">暂无其他推荐关系候选。</span>
+                  </div>
+                </details>
+              </section>
+              <p v-if="leadLinkMessage" class="context-selection">{{ leadLinkMessage }}</p>
 
               <div v-if="selectedEntry.description" class="detail-sections">
                 <section class="detail-section">
@@ -164,7 +340,7 @@
                     <div v-for="link in selectedEntry.source_links" :key="link.project_id + link.concept_key" class="link-item">
                       <a
                         class="link-project link-clickable"
-                        :href="`/process/${link.project_id}?mode=graph&view=reading&focusNode=${encodeURIComponent(link.concept_key)}&from=registry`"
+                        :href="buildSourceArticleGraphHref(link, { from: 'registry' })"
                         target="_blank"
                         :title="`新窗口打开阅读视图，定位到 ${link.concept_key}`"
                       >{{ link.project_name || link.project_id }} ↗</a>
@@ -191,6 +367,7 @@
                       :currentEntryId="registryStore.selectedEntryId"
                       @navigate="handleNavigateConcept"
                       @review="handleReviewRelation"
+                      @type-change="handleUpdateRelationType"
                       @delete="handleDeleteRelation"
                     />
                   </div>
@@ -220,7 +397,7 @@
               </div>
               <div class="form-group">
                 <label>类型</label>
-                <input v-model="formData.concept_type" class="form-input" placeholder="Concept" />
+                <input v-model="formData.concept_type" class="form-input" placeholder="概念" />
               </div>
               <div class="form-group">
                 <label>别名 (逗号分隔)</label>
@@ -323,6 +500,55 @@
               </template>
             </template>
 
+            <template v-else-if="leadMatchingMode">
+              <div class="card-title">下一步</div>
+              <div class="processing-panel">
+                <div v-if="leadAssociationCompleted" class="completion-callout">
+                  <strong>已完成关联</strong>
+                  <span>下一步：打开概念工作台、返回加工篮，或继续处理下一条线索。</span>
+                </div>
+                <dl class="preview-dl compact">
+                  <div><dt>当前线索</dt><dd>{{ registryContext.query || '未命名线索' }}</dd></div>
+                  <div><dt>匹配结果</dt><dd>{{ selectedEntry ? `已自动选中 ${selectedEntry.canonical_name}` : '尚未选中概念' }}</dd></div>
+                  <div><dt>推荐动作</dt><dd>{{ leadAssociationCompleted ? '打开概念工作台或返回加工篮' : (selectedEntry ? '确认关联已有概念' : '先选择候选概念') }}</dd></div>
+                  <div><dt>关联状态</dt><dd>{{ leadAssociationStatus }}</dd></div>
+                </dl>
+                <div class="bring-in-list">
+                  <strong>关联后 KFC 会增加</strong>
+                  <span>{{ filteredCrossRelations.length }} 条跨文关系待审</span>
+                  <span>1 个来源材料片段</span>
+                  <span>{{ registryContext.clusterId ? '1 个 主题簇 关联' : '待补充 主题簇' }}</span>
+                </div>
+                <div class="action-row vertical">
+                  <button
+                    v-if="!leadAssociationCompleted"
+                    class="btn-primary"
+                    type="button"
+                    :disabled="leadLinking || !canLinkLeadToSelected"
+                    @click="handleLinkSelectedConcept"
+                  >
+                    {{ leadLinking ? '关联中...' : linkPrimaryLabel }}
+                  </button>
+                  <router-link
+                    v-if="leadAssociationCompleted && selectedEntry"
+                    class="btn-primary compact"
+                    :to="conceptWorkbenchRoute(selectedEntry.entry_id)"
+                  >打开概念工作台</router-link>
+                  <button class="btn-small" type="button" @click="showCreateForm = true">沉淀为新概念</button>
+                  <button class="btn-small" type="button" @click="focusSearchInput">换一个已有概念</button>
+                  <button class="btn-small" type="button" disabled>暂不处理 / 忽略线索</button>
+                </div>
+                <p v-if="leadLinkMessage" class="request-note">{{ leadLinkMessage }}</p>
+                <details class="advanced-filter-details">
+                  <summary>高级筛选</summary>
+                  <div class="xfilter-section">
+                    <div class="xfilter-label">关系类型 / 状态 / 置信度 / 排序</div>
+                    <p class="section-copy mini-copy">高级筛选保留在折叠区，避免压过处理动作。</p>
+                  </div>
+                </details>
+              </div>
+            </template>
+
             <!-- Default: cross-relation filters + action info -->
             <template v-else>
               <!-- Cross-relation filter panel (when concept has relations) -->
@@ -375,7 +601,7 @@
                   </div>
                 </div>
 
-                <!-- Actions -->
+                <!-- 动作 -->
                 <div class="xfilter-actions">
                   <button class="btn-small" @click="resetXrelFilter">清空筛选</button>
                 </div>
@@ -407,6 +633,8 @@ import ThemeTab from './tabs/ThemeTab.vue'
 import EvolutionTab from './tabs/EvolutionTab.vue'
 import ReviewTab from './tabs/ReviewTab.vue'
 import CrossRelationCard from '../../components/CrossRelationCard.vue'
+import { buildSourceArticleGraphHref } from '../../utils/articleGraphRoute'
+import { applyLeadPromotionAction } from '../../services/api/topicClustersApi'
 import {
   registryStore,
   loadEntries,
@@ -529,12 +757,14 @@ watch(
 const currentPanel = ref('list')
 const showCreateForm = ref(false)
 const editMode = ref(false)
-const searchQuery = ref('')
+const searchInputRef = ref(null)
+const searchQuery = ref(typeof route.query.query === 'string' ? route.query.query : '')
 const suggestProjectId = ref('')
+const autoSelectionMessage = ref('')
 
 const formData = ref({
   canonical_name: '',
-  concept_type: 'Concept',
+  concept_type: '概念',
   aliasesRaw: '',
   description: '',
 })
@@ -549,6 +779,25 @@ const editData = ref({
 const lastProjectId = computed(() => route.query.from || '')
 
 const selectedEntry = computed(() => registryStore.selectedEntry)
+const leadMatchingMode = computed(() => ['lead', 'basket'].includes(registryContext.value.from))
+const registryModeTitle = computed(() => {
+  if (leadMatchingMode.value && activeTab.value === 'concepts') {
+    return `概念匹配：${registryContext.value.query || '未命名线索'}`
+  }
+  return activeTabMeta.value.title
+})
+const registryModeSubtitle = computed(() => {
+  if (leadMatchingMode.value && activeTab.value === 'concepts') {
+    const parts = ['来自文章概念线索']
+    if (registryContext.value.articleId) parts.push(registryContext.value.articleId)
+    if (registryContext.value.projectId) parts.push(`当前研究项目 ${registryContext.value.projectId}`)
+    return parts.join(' · ')
+  }
+  return activeTabMeta.value.subtitle
+})
+const leadLinking = ref(false)
+const leadLinkMessage = ref('')
+const leadLinkedEntryId = ref('')
 
 const totalLinks = computed(() =>
   registryStore.entries.reduce((sum, e) => sum + (e.source_links?.length || 0), 0)
@@ -559,11 +808,119 @@ const uniqueTypes = computed(() =>
 )
 
 const displayEntries = computed(() => {
-  if (searchQuery.value && registryStore.searchResults.length) {
-    return registryStore.searchResults
-  }
+  if (searchQuery.value.trim()) return registryStore.searchResults
   return registryStore.entries
 })
+
+const registryContext = computed(() => {
+  const query = typeof route.query.query === 'string' ? route.query.query : searchQuery.value
+  const from = typeof route.query.from === 'string' ? route.query.from : ''
+  return {
+    active: Boolean(query || from === 'lead' || from === 'basket'),
+    query,
+    from,
+    leadId: typeof route.query.lead_id === 'string' ? route.query.lead_id : '',
+    promotionId: typeof route.query.promotion_id === 'string' ? route.query.promotion_id : '',
+    sliceId: typeof route.query.slice_id === 'string' ? route.query.slice_id : '',
+    articleId: typeof route.query.article_id === 'string' ? route.query.article_id : '',
+    clusterId: typeof route.query.cluster_id === 'string' ? route.query.cluster_id : '',
+    projectId: typeof route.query.project_id === 'string' ? route.query.project_id : '',
+  }
+})
+
+const leadAssociationStatus = computed(() => {
+  if (!selectedEntry.value) return '尚未完成关联'
+  if (leadLinkedEntryId.value === selectedEntry.value.entry_id) {
+    return `已关联到 ${selectedEntry.value.canonical_name}`
+  }
+  const sourceLeadId = registryContext.value.leadId || registryContext.value.promotionId
+  const linkedByLead = sourceLeadId && (
+    selectedEntry.value.source_lead_id === sourceLeadId
+    || selectedEntry.value.source_promotion_id === registryContext.value.promotionId
+  )
+  const linkedByProject = registryContext.value.projectId && (selectedEntry.value.source_links || []).some((link) => (
+    link.project_id === registryContext.value.projectId
+  ))
+  return linkedByLead || linkedByProject ? `已关联到 ${selectedEntry.value.canonical_name}` : '尚未完成关联'
+})
+
+const canLinkLeadToSelected = computed(() => Boolean(
+  leadMatchingMode.value
+  && selectedEntry.value?.entry_id
+  && registryContext.value.clusterId
+  && registryContext.value.promotionId
+))
+
+const linkPrimaryLabel = computed(() => {
+  if (leadAssociationStatus.value.startsWith('已关联')) return '已关联到该概念'
+  if (!canLinkLeadToSelected.value) return '先加入加工篮再关联'
+  return '关联到该概念'
+})
+
+const leadAssociationCompleted = computed(() => leadAssociationStatus.value.startsWith('已关联'))
+
+const leadDecisionExplanation = computed(() => {
+  if (!selectedEntry.value) return '请先从左侧候选中选择一个已有概念，或沉淀为新概念。'
+  if (leadAssociationCompleted.value) {
+    return `该线索已进入 KFC，并关联到已有概念 ${selectedEntry.value.canonical_name}。`
+  }
+  if (!canLinkLeadToSelected.value) {
+    return '该页面已自动选中候选概念，但缺少可写回的 promotion_id；请从加工篮进入后完成关联。'
+  }
+  return `该线索与已有概念 ${selectedEntry.value.canonical_name} 名称一致或语义接近，建议确认关联，而不是重复新建概念。`
+})
+
+const leadMatchReason = computed(() => {
+  if (!selectedEntry.value) return '尚未选择候选概念。'
+  const query = normalizeMatchValue(registryContext.value.query)
+  const name = normalizeMatchValue(selectedEntry.value.canonical_name)
+  if (query && name && query === name) return '名称完全一致，且 概念库已自动选中该规范概念。'
+  if (autoSelectionMessage.value) return autoSelectionMessage.value
+  return '搜索结果中该概念最接近当前文章线索。'
+})
+
+const leadMatchRisk = computed(() => {
+  if (!selectedEntry.value) return '无法判断风险。'
+  if (!selectedEntry.value.description) return '目标概念缺少定义，关联后建议在概念工作台补充定义。'
+  return '未发现明显命名冲突；仍建议在工作台审查来源证据和候选关系。'
+})
+
+const matchingCandidateGroups = computed(() => {
+  if (!leadMatchingMode.value) return []
+  const results = displayEntries.value || []
+  const exact = findExactSearchMatch(results, registryContext.value.query)
+  const exactIds = new Set(exact ? [exact.entry_id] : [])
+  const selected = selectedEntry.value && !exactIds.has(selectedEntry.value.entry_id)
+    ? [selectedEntry.value]
+    : []
+  const similar = results.filter((entry) => !exactIds.has(entry.entry_id) && entry.entry_id !== selectedEntry.value?.entry_id).slice(0, 5)
+  const groups = []
+  if (exact) groups.push({ key: 'exact', label: '精确匹配', items: [exact] })
+  if (selected.length) groups.push({ key: 'selected', label: '已自动选中', items: selected })
+  if (similar.length) groups.push({ key: 'similar', label: '相近概念', items: similar })
+  if (registryContext.value.articleId) {
+    groups.push({
+      key: 'same_article',
+      label: '同篇文章概念',
+      items: results.slice(0, 3),
+    })
+  }
+  return groups.filter((group) => group.items.length)
+})
+
+const relationRecommendationEntries = computed(() =>
+  (displayEntries.value || [])
+    .filter((entry) => entry.entry_id !== selectedEntry.value?.entry_id)
+    .slice(0, 4)
+)
+
+const leadRelationPath = computed(() => [
+  `当前线索：${registryContext.value.query || selectedEntry.value?.canonical_name || '未命名线索'}`,
+  `来源文章：${registryContext.value.articleId || '未携带 article_id'}`,
+  `材料片段：${registryContext.value.sliceId || '待从加工篮补充'}`,
+  `主题簇：${registryContext.value.clusterId || '未携带 cluster_id'}`,
+  `候选概念：${selectedEntry.value?.canonical_name || '尚未选择'}`,
+])
 
 // -- Cross-relation filter state (local, no API calls) --
 const xrelFilterState = ref({
@@ -644,6 +1001,92 @@ function handleSearch() {
   }, 300)
 }
 
+function focusSearchInput() {
+  searchInputRef.value?.focus?.()
+}
+
+function normalizeMatchValue(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
+}
+
+function findExactSearchMatch(results, query) {
+  const normalizedQuery = normalizeMatchValue(query)
+  if (!normalizedQuery) return null
+  return results.find((entry) => {
+    if (normalizeMatchValue(entry.canonical_name) === normalizedQuery) return true
+    return (entry.aliases || []).some((alias) => normalizeMatchValue(alias) === normalizedQuery)
+  }) || null
+}
+
+async function runRouteSearchAndSelection() {
+  const routeQuery = typeof route.query.query === 'string' ? route.query.query.trim() : ''
+  const selectedFromUrl = typeof route.query.selected === 'string'
+    ? route.query.selected
+    : (typeof route.query.select === 'string' ? route.query.select : '')
+  autoSelectionMessage.value = ''
+  if (routeQuery && routeQuery !== searchQuery.value) {
+    searchQuery.value = routeQuery
+  }
+  if (routeQuery) {
+    await searchEntries(routeQuery)
+  }
+  if (selectedFromUrl) {
+    await handleSelectEntry(selectedFromUrl)
+    autoSelectionMessage.value = `已自动选中最可能匹配的概念：${registryStore.selectedEntry?.canonical_name || selectedFromUrl}`
+    return
+  }
+  if (routeQuery) {
+    const exact = findExactSearchMatch(registryStore.searchResults, routeQuery)
+    if (exact) {
+      await handleSelectEntry(exact.entry_id)
+      autoSelectionMessage.value = `已自动选中最可能匹配的概念：${exact.canonical_name}`
+    }
+  }
+}
+
+function conceptWorkbenchRoute(entryId) {
+  const query = {}
+  for (const key of ['from', 'query', 'lead_id', 'promotion_id', 'slice_id', 'article_id', 'cluster_id', 'project_id']) {
+    if (typeof route.query[key] === 'string' && route.query[key]) query[key] = route.query[key]
+  }
+  return { path: `/workspace/entry/${entryId}`, query }
+}
+
+async function handleLinkSelectedConcept() {
+  if (!selectedEntry.value || !leadMatchingMode.value) return
+  if (!canLinkLeadToSelected.value) {
+    leadLinkMessage.value = '需要从加工篮进入并携带 promotion_id，才能直接完成关联。当前页面已自动选中匹配项，但尚未完成关联。'
+    return
+  }
+  leadLinking.value = true
+  leadLinkMessage.value = ''
+  try {
+    await applyLeadPromotionAction(registryContext.value.clusterId, registryContext.value.promotionId, {
+      action: 'link_existing_registry_entry',
+      target: {
+        registry_entry_id: selectedEntry.value.entry_id,
+        registry_entry_label: selectedEntry.value.canonical_name,
+      },
+      context: {
+        lead_id: registryContext.value.leadId,
+        promotion_id: registryContext.value.promotionId,
+        slice_id: registryContext.value.sliceId,
+        article_id: registryContext.value.articleId,
+        cluster_id: registryContext.value.clusterId,
+        project_id: registryContext.value.projectId,
+      },
+      note: '人工从概念匹配工作台关联已有注册表条目。',
+    })
+    leadLinkedEntryId.value = selectedEntry.value.entry_id
+    leadLinkMessage.value = `已关联到该概念：${selectedEntry.value.canonical_name}`
+    await selectEntry(selectedEntry.value.entry_id)
+  } catch (err) {
+    leadLinkMessage.value = err?.message || '关联失败，请返回加工篮重试。'
+  } finally {
+    leadLinking.value = false
+  }
+}
+
 function handleSelectEntry(entryId) {
   selectEntry(entryId)
   loadCrossRelations(entryId)
@@ -668,6 +1111,10 @@ async function handleReviewRelation(relationId, reviewStatus) {
   await reviewCrossRelation(relationId, { review_status: reviewStatus })
 }
 
+async function handleUpdateRelationType(relationId, relationType) {
+  await reviewCrossRelation(relationId, { relation_type: relationType })
+}
+
 async function handleDeleteRelation(relationId) {
   if (!confirm('确定删除此跨文章关系？')) return
   const ok = await removeCrossRelation(relationId)
@@ -680,7 +1127,7 @@ async function handleDeleteRelation(relationId) {
 
 function resetForm() {
   showCreateForm.value = false
-  formData.value = { canonical_name: '', concept_type: 'Concept', aliasesRaw: '', description: '' }
+  formData.value = { canonical_name: '', concept_type: '概念', aliasesRaw: '', description: '' }
 }
 
 async function handleCreate() {
@@ -690,7 +1137,7 @@ async function handleCreate() {
     .filter(Boolean)
   const entry = await addEntry({
     canonical_name: formData.value.canonical_name,
-    concept_type: formData.value.concept_type || 'Concept',
+    concept_type: formData.value.concept_type || '概念',
     aliases,
     description: formData.value.description,
   })
@@ -816,6 +1263,7 @@ async function hydrateRegistry() {
   await loadEntries()
   const entryIds = registryStore.entries.map(e => e.entry_id)
   if (entryIds.length) loadCrossRelationCounts(entryIds)
+  await runRouteSearchAndSelection()
   // Re-hydrate the currently-selected entry if one is set, so the
   // middle detail panel flips to the new data source too.
   if (registryStore.selectedEntryId) {
@@ -825,6 +1273,11 @@ async function hydrateRegistry() {
 }
 
 onMounted(hydrateRegistry)
+
+watch(
+  () => [route.query.query, route.query.selected, route.query.select, route.query.from],
+  () => { runRouteSearchAndSelection() },
+)
 
 // Reload registry on mode flip so the list + counts switch together.
 watch(appMode, () => { hydrateRegistry() })
@@ -884,6 +1337,298 @@ watch(appMode, () => { hydrateRegistry() })
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.registry-context-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #c7d2fe;
+  border-left: 4px solid #6366f1;
+  border-radius: 10px;
+  background: #f7f7ff;
+}
+.registry-context-banner h3 {
+  margin: 2px 0 4px;
+  color: #1f2937;
+  font-size: 18px;
+}
+.registry-context-banner p {
+  margin: 0;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.context-kicker {
+  color: #4f46e5;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.context-selection {
+  margin-top: 6px !important;
+  color: #047857 !important;
+  font-weight: 700;
+}
+.context-grid,
+.preview-dl.compact {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+.context-grid div,
+.preview-dl.compact div {
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.68);
+}
+.context-grid dt,
+.preview-dl.compact dt {
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 800;
+}
+.context-grid dd,
+.preview-dl.compact dd {
+  margin: 2px 0 0;
+  color: #1f2937;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.context-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.lead-decision-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 10px 24px rgba(30, 64, 175, 0.06);
+}
+.decision-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+.decision-hero h3 {
+  margin: 3px 0 6px;
+  color: #111827;
+  font-size: 22px;
+}
+.decision-hero p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.55;
+}
+.decision-explain {
+  max-width: 760px;
+  margin-top: 8px !important;
+  color: #475569 !important;
+}
+.decision-status-card {
+  width: min(260px, 100%);
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff7ed;
+}
+.decision-status-card.done {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+.decision-status-card span,
+.decision-status-card small {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+.decision-status-card strong {
+  display: block;
+  margin: 4px 0;
+  color: #1f2937;
+  overflow-wrap: anywhere;
+}
+.decision-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(260px, 1.15fr) minmax(240px, 1fr);
+  gap: 12px;
+}
+.decision-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fff;
+}
+.decision-actions-card {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+.decision-dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.decision-dl div {
+  display: grid;
+  gap: 2px;
+}
+.decision-dl dt {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+.decision-dl dd {
+  margin: 0;
+  color: #1e293b;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.bring-in-checklist {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.completion-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #bbf7d0;
+  border-radius: 9px;
+  padding: 10px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.completion-callout strong {
+  color: #14532d;
+}
+.grouped-candidate-list {
+  gap: 12px;
+}
+.candidate-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.candidate-group-title {
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+.matching-tabs {
+  display: inline-flex;
+  width: fit-content;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  background: #f8fafc;
+  margin: 12px 0;
+}
+.matching-tab {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.matching-tab.active {
+  background: #fff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+.matching-panel {
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fbff;
+}
+.task-explanation-panel {
+  margin-top: 12px;
+}
+.matching-candidate-actions,
+.bring-in-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #334155;
+  font-size: 12px;
+}
+.local-graph {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.graph-node {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+.graph-node--lead { background: #fff7ed; color: #9a3412; }
+.graph-node--concept { background: #eff6ff; color: #1d4ed8; }
+.graph-node--article { background: #f5f3ff; color: #6d28d9; }
+.path-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.processing-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.action-row.vertical {
+  flex-direction: column;
+  align-items: stretch;
+}
+.advanced-filter-details {
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.62);
+}
+.advanced-filter-details summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 900;
+}
+.system-explain-details {
+  margin-top: 12px;
+}
+.system-explain-details[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.btn-primary.compact {
+  padding: 7px 12px;
+  font-size: 12px;
+  text-decoration: none;
 }
 
 .section-badge {
@@ -1032,6 +1777,11 @@ watch(appMode, () => { hydrateRegistry() })
 .chip.soft {
   background: rgba(255, 255, 255, 0.72);
   color: var(--text-secondary);
+}
+.chip.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
 }
 
 .chip-wrap {
@@ -1344,6 +2094,9 @@ watch(appMode, () => { hydrateRegistry() })
   .registry-layout {
     grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   }
+  .decision-grid {
+    grid-template-columns: 1fr 1fr;
+  }
   .action-card {
     grid-column: span 2;
   }
@@ -1360,6 +2113,18 @@ watch(appMode, () => { hydrateRegistry() })
     border-bottom: 1px solid var(--border-default);
   }
   .registry-layout {
+    grid-template-columns: 1fr;
+  }
+  .registry-context-banner,
+  .decision-hero {
+    flex-direction: column;
+  }
+  .context-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .decision-grid,
+  .local-graph {
     grid-template-columns: 1fr;
   }
   .action-card {

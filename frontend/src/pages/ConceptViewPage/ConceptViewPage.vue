@@ -1,6 +1,6 @@
 <template>
   <section class="phase2-page">
-    <div class="section-badge">Concept Registry</div>
+    <div class="section-badge">概念库</div>
     <h2 class="section-title">项目内概念总览</h2>
     <p class="section-copy">
       这一页先固定成 `project-scoped` 的只读概念候选总览，不提前承诺 canonical 写回、跨项目归一或自动 merge。
@@ -74,11 +74,11 @@
       <article class="card detail-card">
         <div class="card-header">
           <div>
-            <div class="detail-kicker">Selected Candidate</div>
+            <div class="detail-kicker">当前候选</div>
             <h3 class="detail-title">{{ selectedConcept.displayName || '未选择候选概念' }}</h3>
           </div>
           <div class="detail-badges">
-            <span class="chip">{{ selectedConcept.conceptType || 'Node' }}</span>
+            <span class="chip">{{ selectedConcept.conceptType || '节点' }}</span>
             <span :class="['chip', statusChipClass(selectedConcept.status)]">{{ statusLabel(selectedConcept.status) }}</span>
           </div>
         </div>
@@ -392,7 +392,7 @@ watch(appMode, async () => {
   line-height: 1.6;
 }
 
-/* Status chip color variants (Gap #5 fix). Applied to both the list-row
+/* Status chip color variants (Gap #5 fix). 已应用 to both the list-row
    .candidate-status span and the detail-panel .chip span via v-bind. */
 .candidate-status.status-accepted,
 .chip.status-accepted {

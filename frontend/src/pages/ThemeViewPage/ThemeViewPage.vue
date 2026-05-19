@@ -98,6 +98,22 @@
             <span>{{ (hubView.related_projects || []).length }} 篇文章</span>
           </div>
 
+          <div v-if="currentResearchProject" class="research-adoption-panel">
+            <div>
+              <strong>当前研究项目：{{ currentResearchProject.title }}</strong>
+              <p>人工确认后，将当前 Theme 和所选核心概念加入项目资产，不自动 merge Registry。</p>
+            </div>
+            <button class="btn-small" type="button" @click="addSelectedThemeToProject">加入 Theme</button>
+            <button
+              class="btn-small"
+              type="button"
+              :disabled="!hubView.core_concepts.length"
+              @click="addCoreConceptsToProject"
+            >
+              加入核心概念
+            </button>
+          </div>
+
           <!-- Core concepts (members) -->
           <div v-if="hubView.core_concepts.length" class="concept-section">
             <div class="section-label">核心概念 (member)</div>
@@ -188,7 +204,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import AppShell from '../../components/common/AppShell.vue'
 import CopyLinkButton from '../../components/common/CopyLinkButton.vue'
 // Reads flip live/demo via dataClient; writes stay on the live API path.
@@ -196,6 +212,8 @@ import {
   listGlobalThemes,
   getThemeHubView,
   getOrphans,
+  getResearchProject,
+  updateResearchProject,
 } from '../../data/dataClient'
 import {
   createGlobalTheme,
@@ -205,6 +223,7 @@ import {
   getGovernanceRequest,
 } from '../../services/api/themeApi'
 import { appMode } from '../../runtime/appMode'
+import { readCurrentResearchProject, setCurrentResearchProject, subscribeCurrentResearchProject } from '../../utils/currentResearchProjectContext'
 
 const crumbs = [
   { label: '跨项目', to: '/workspace/registry' },
@@ -227,6 +246,9 @@ const scanError = ref(false)
 const pendingRequest = ref(null)
 const createError = ref('')
 const newTheme = reactive({ name: '', description: '', keywords: '' })
+const currentResearchProject = ref(null)
+const currentResearchProjectDetail = ref(null)
+let unsubscribeResearchProject = () => {}
 
 async function loadThemes() {
   loading.value = true
@@ -254,6 +276,73 @@ async function selectTheme(themeId) {
   } finally {
     hubLoading.value = false
   }
+}
+
+async function refreshCurrentResearchProjectDetail() {
+  const current = readCurrentResearchProject()
+  currentResearchProject.value = current
+  currentResearchProjectDetail.value = null
+  if (!current?.id) return
+  try {
+    const response = await getResearchProject(current.id)
+    const project = response?.data || null
+    currentResearchProjectDetail.value = project || null
+    if (project) setCurrentResearchProject(project)
+  } catch {
+    currentResearchProjectDetail.value = null
+  }
+}
+
+async function patchCurrentProject(patch) {
+  if (!currentResearchProjectDetail.value?.id) return
+  const response = await updateResearchProject(currentResearchProjectDetail.value.id, patch)
+  currentResearchProjectDetail.value = response?.data || currentResearchProjectDetail.value
+  if (response?.data) setCurrentResearchProject(response.data)
+}
+
+async function addSelectedThemeToProject() {
+  if (!hubView.value?.theme || !currentResearchProjectDetail.value?.id) return
+  const theme = hubView.value.theme
+  const existing = currentResearchProjectDetail.value.linked_themes || []
+  if (existing.some((item) => item.theme_id === theme.theme_id)) return
+  await patchCurrentProject({
+    linked_themes: [
+      ...existing,
+      {
+        theme_id: theme.theme_id,
+        name: theme.name,
+        source: { registry: 'global_theme_registry', route: `/workspace/themes/${theme.theme_id}` },
+        status: 'candidate',
+        linked_by: 'human',
+        linked_at: new Date().toISOString(),
+      },
+    ],
+  })
+}
+
+async function addCoreConceptsToProject() {
+  if (!hubView.value?.core_concepts?.length || !currentResearchProjectDetail.value?.id) return
+  const existing = currentResearchProjectDetail.value.linked_concepts || []
+  const existingIds = new Set(existing.map((item) => item.concept_id || item.entry_id || item.name))
+  const additions = hubView.value.core_concepts
+    .slice(0, 5)
+    .filter((item) => !existingIds.has(item.entry_id))
+    .map((item) => ({
+      concept_id: item.entry_id,
+      entry_id: item.entry_id,
+      name: item.canonical_name,
+      canonical_status: 'canonical',
+      source: {
+        registry: 'concept_registry',
+        theme_id: hubView.value.theme?.theme_id,
+        theme_name: hubView.value.theme?.name,
+      },
+      status: 'candidate',
+      linked_by: 'human',
+      linked_at: new Date().toISOString(),
+    }))
+  if (!additions.length) return
+  await patchCurrentProject({ linked_concepts: [...existing, ...additions] })
 }
 
 async function loadOrphansConcepts() {
@@ -341,7 +430,16 @@ async function handleGovernanceScan() {
   }
 }
 
-onMounted(hydrateHub)
+onMounted(() => {
+  hydrateHub()
+  refreshCurrentResearchProjectDetail()
+  unsubscribeResearchProject = subscribeCurrentResearchProject(() => {
+    refreshCurrentResearchProjectDetail()
+  })
+})
+onBeforeUnmount(() => {
+  unsubscribeResearchProject()
+})
 
 // Re-hydrate when live/demo flips.
 watch(appMode, () => { hydrateHub() })
@@ -368,6 +466,22 @@ watch(appMode, () => { hydrateHub() })
 }
 .governance-banner.governance-error {
   border-color: #ef9a9a; background: #ffebee; color: #c62828;
+}
+.research-adoption-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-surface-2);
+  padding: 10px;
+  margin: 12px 0;
+}
+.research-adoption-panel p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 .banner-action-btn {
   padding: 4px 12px; border-radius: 6px;

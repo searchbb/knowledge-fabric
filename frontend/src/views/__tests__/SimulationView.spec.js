@@ -123,7 +123,7 @@ describe('SimulationView', () => {
     expect(getSimulationMock).toHaveBeenCalledWith('sim_1')
     expect(getProjectMock).toHaveBeenCalledWith('proj_1')
     expect(getTaskStatusMock).toHaveBeenCalledWith('task_1')
-    expect(getGraphDataMock).toHaveBeenCalledWith('graph_1')
+    expect(getGraphDataMock).toHaveBeenCalledWith('graph_1', { timeout: 8000 })
 
     const text = wrapper.text()
     expect(text).toContain('LEGACY SURFACE')

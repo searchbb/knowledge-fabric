@@ -16,6 +16,15 @@ import ThemeDetailPage from '../pages/ThemeDetailPage/ThemeDetailPage.vue'
 import ConceptDetailPage from '../pages/ConceptDetailPage/ConceptDetailPage.vue'
 import RelationListPage from '../pages/RelationListPage/RelationListPage.vue'
 import RelationDetailPage from '../pages/RelationDetailPage/RelationDetailPage.vue'
+import TopicClustersPage from '../pages/TopicClustersPage.vue'
+import TopicClusterDetailPage from '../pages/TopicClusterDetailPage.vue'
+import TopicClusterProposalsPage from '../pages/TopicClusterProposalsPage.vue'
+import TopicClusterProposalDetailPage from '../pages/TopicClusterProposalDetailPage.vue'
+import WikiIntakePage from '../pages/WikiIntakePage.vue'
+import WikiTopicsPage from '../pages/WikiTopicsPage.vue'
+import WikiTopicDetailPage from '../pages/WikiTopicDetailPage.vue'
+import ResearchProjectsPage from '../pages/ResearchProjectsPage.vue'
+import ResearchReviewWorkspacePage from '../pages/research/ResearchReviewWorkspacePage.vue'
 
 const routes = [
   {
@@ -35,6 +44,15 @@ const routes = [
     name: 'Process',
     component: Process,
     props: true
+  },
+  {
+    path: '/workspace/research/review',
+    name: 'ResearchReviewWorkspace',
+    component: ResearchReviewWorkspacePage,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
   },
   {
     path: '/workspace/:projectId/:section?',
@@ -118,11 +136,86 @@ const routes = [
     },
   },
   {
+    path: '/workspace/topic-clusters',
+    name: 'TopicClusters',
+    component: TopicClustersPage,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/topic-clusters/proposals',
+    name: 'TopicClusterProposals',
+    component: TopicClusterProposalsPage,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/topic-clusters/proposals/:proposalId',
+    name: 'TopicClusterProposalDetail',
+    component: TopicClusterProposalDetailPage,
+    props: true,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/topic-clusters/:clusterId',
+    name: 'TopicClusterDetail',
+    component: TopicClusterDetailPage,
+    props: true,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/wiki-intake',
+    name: 'WikiIntake',
+    component: WikiIntakePage,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/wiki-topics',
+    name: 'WikiTopics',
+    component: WikiTopicsPage,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/wiki-topics/:topicId',
+    name: 'WikiTopicDetail',
+    component: WikiTopicDetailPage,
+    props: true,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
     path: '/workspace/discover',
     name: 'DiscoverQueue',
     // Eager-load this route with the main workspace shell so switching from an
     // already-open page does not need a second chunk fetch from the dev server.
     component: DiscoverQueuePage,
+    meta: {
+      runtimeSurface: 'global',
+      productStatus: 'phase2',
+    },
+  },
+  {
+    path: '/workspace/research',
+    name: 'ResearchProjects',
+    component: ResearchProjectsPage,
     meta: {
       runtimeSurface: 'global',
       productStatus: 'phase2',

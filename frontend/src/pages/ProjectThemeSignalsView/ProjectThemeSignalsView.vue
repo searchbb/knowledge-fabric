@@ -71,7 +71,7 @@
             </div>
 
             <div class="card-actions">
-              <router-link :to="`/workspace/themes/${t.theme_id}`" class="btn-sm primary">进入主题全景 →</router-link>
+              <router-link :to="themePanoramaRoute(t)" class="btn-sm primary">进入主题全景 →</router-link>
             </div>
           </article>
         </div>
@@ -192,6 +192,16 @@ function extractMemberIds(theme) {
   }
   if (Array.isArray(theme.concept_entry_ids)) return theme.concept_entry_ids
   return []
+}
+
+function themePanoramaRoute(theme) {
+  return {
+    path: `/workspace/themes/${theme.theme_id}`,
+    query: {
+      from: 'project-theme-signals',
+      project_id: projectId.value,
+    },
+  }
 }
 
 async function loadAll() {

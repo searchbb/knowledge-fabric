@@ -42,9 +42,17 @@
           @click="viewMode = 'source'"
         >源码</button>
       </div>
+      <div
+        v-if="focusStatusLabel"
+        class="raw-focus-status"
+        :class="`raw-focus-status--${focusMatch?.status || 'idle'}`"
+      >
+        {{ focusStatusLabel }}
+      </div>
 
       <article
         v-if="viewMode === 'rendered'"
+        ref="markdownEl"
         class="markdown-prose"
         v-html="safeHtml"
       />
@@ -54,7 +62,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 
@@ -62,6 +70,8 @@ import { getArticleRaw } from '../../api/vault'
 
 const props = defineProps({
   projectId: { type: String, required: true },
+  focusTarget: { type: Object, default: null },
+  autoScroll: { type: Boolean, default: false },
 })
 
 const data = ref(null)
@@ -69,6 +79,7 @@ const loading = ref(false)
 const error = ref('')
 const errorCode = ref('')
 const viewMode = ref('rendered')
+const markdownEl = ref(null)
 
 // 单实例 markdown-it:禁用原生 HTML(html:false),只允许 md 本身语法,降低 XSS 面。
 // DOMPurify 再做一次白名单清洗,双保险。
@@ -95,7 +106,7 @@ const sanitizeConfig = {
   ADD_ATTR: ['target', 'rel'],
 }
 
-const safeHtml = computed(() => {
+const renderedHtml = computed(() => {
   if (!data.value?.content) return ''
   const rawHtml = md.render(data.value.content)
   const clean = DOMPurify.sanitize(rawHtml, sanitizeConfig)
@@ -116,6 +127,16 @@ const safeHtml = computed(() => {
         : `<img${attrs} referrerpolicy="no-referrer">`,
   )
 })
+
+const focusMatch = computed(() => findBestRawMatch(renderedHtml.value, props.focusTarget))
+const focusStatusLabel = computed(() => {
+  if (!props.focusTarget) return ''
+  if (focusMatch.value?.status === 'located') return '已定位到原文段落'
+  if (focusMatch.value?.status === 'possible') return '按节点名称匹配到可能段落'
+  return '未找到精确原文，仅显示全文'
+})
+
+const safeHtml = computed(() => annotateFocusTarget(renderedHtml.value, focusMatch.value))
 
 const errorHint = computed(() => {
   switch (errorCode.value) {
@@ -162,6 +183,100 @@ function formatSize(bytes) {
 // 懒加载:仅首次挂载(tab 切过来) + projectId 变更时拉取
 onMounted(load)
 watch(() => props.projectId, load)
+
+watch(() => props.focusTarget, () => {
+  if (props.focusTarget) {
+    viewMode.value = 'rendered'
+  }
+}, { deep: true })
+
+watch([focusMatch, viewMode], async () => {
+  if (!props.autoScroll || viewMode.value !== 'rendered' || focusMatch.value?.elementIndex == null) return
+  await nextTick()
+  const target = markdownEl.value?.querySelector?.('.raw-focus-target')
+  if (target && typeof target.scrollIntoView === 'function') {
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+}, { flush: 'post' })
+
+function normalizeText(value) {
+  return String(value || '')
+    .replace(/[#*_`>[\]().,，。:：;；!?！？、\s+\-]+/g, '')
+    .toLowerCase()
+}
+
+function getHtmlSegments(html) {
+  if (!html) return []
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html')
+  return Array.from(doc.body.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote'))
+    .map((element, index) => ({
+      index,
+      tag: element.tagName.toLowerCase(),
+      text: element.textContent || '',
+      normalized: normalizeText(element.textContent || ''),
+    }))
+    .filter(segment => segment.normalized.length > 0)
+}
+
+function buildFocusCandidates(focusTarget) {
+  if (!focusTarget) return []
+  const candidates = [
+    { value: focusTarget.source_span || focusTarget.sourceSpan || focusTarget.source_anchor || focusTarget.sourceAnchor, status: 'located', preferHeading: false },
+    { value: focusTarget.quote || focusTarget.source_quote || focusTarget.sourceQuote, status: 'located', preferHeading: false },
+    { value: focusTarget.context || focusTarget.source_context || focusTarget.sourceContext, status: 'located', preferHeading: false },
+    { value: focusTarget.readingSectionLabel, status: 'possible', preferHeading: true },
+    { value: focusTarget.name, status: 'possible', preferHeading: false },
+  ]
+  if (focusTarget.summary) {
+    const compact = String(focusTarget.summary).trim()
+    candidates.push({ value: compact.slice(0, 96), status: 'possible', preferHeading: false })
+  }
+  return candidates
+    .map(candidate => ({
+      ...candidate,
+      value: String(candidate.value || '').trim(),
+      normalized: normalizeText(candidate.value),
+    }))
+    .filter(candidate => candidate.normalized.length >= 2)
+}
+
+function findBestRawMatch(html, focusTarget) {
+  const candidates = buildFocusCandidates(focusTarget)
+  if (!candidates.length) return null
+  const segments = getHtmlSegments(html)
+  if (!segments.length) return { status: 'missing', elementIndex: null }
+
+  for (const candidate of candidates) {
+    const pool = candidate.preferHeading
+      ? [...segments.filter(segment => /^h[1-6]$/.test(segment.tag)), ...segments]
+      : segments
+    const found = pool.find(segment =>
+      segment.normalized.includes(candidate.normalized)
+      || candidate.normalized.includes(segment.normalized)
+    )
+    if (found) {
+      return {
+        status: candidate.status,
+        elementIndex: found.index,
+        text: found.text,
+        candidate: candidate.value,
+      }
+    }
+  }
+  return { status: 'missing', elementIndex: null }
+}
+
+function annotateFocusTarget(html, match) {
+  if (!html || match?.elementIndex == null) return html
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html')
+  const elements = Array.from(doc.body.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote'))
+  const target = elements[match.elementIndex]
+  if (target) {
+    target.classList.add('raw-focus-target')
+    target.setAttribute('data-raw-focus', 'true')
+  }
+  return doc.body.firstElementChild?.innerHTML || html
+}
 </script>
 
 <style scoped>
@@ -232,6 +347,31 @@ watch(() => props.projectId, load)
   color: var(--text-on-accent);
   border-color: var(--accent-primary);
 }
+.raw-focus-status {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-muted);
+}
+.raw-focus-status--located {
+  color: #245b36;
+  border-color: #b9d9c4;
+  background: #edf8f0;
+}
+.raw-focus-status--possible {
+  color: #6b4a19;
+  border-color: #ead7a5;
+  background: #fff9e8;
+}
+.raw-focus-status--missing {
+  color: #6b7280;
+  border-color: var(--border-default);
+  background: var(--bg-muted);
+}
 
 .raw-body {
   flex: 1;
@@ -260,6 +400,12 @@ watch(() => props.projectId, load)
 .markdown-prose :deep(h2) { font-size: 20px; margin-top: 24px; color: var(--reading-ink); }
 .markdown-prose :deep(h3) { font-size: 17px; margin-top: 20px; color: var(--reading-ink); }
 .markdown-prose :deep(p) { margin: 10px 0; }
+.markdown-prose :deep(.raw-focus-target) {
+  scroll-margin: 80px;
+  border-radius: 6px;
+  background: rgba(255, 229, 128, 0.32);
+  box-shadow: 0 0 0 3px rgba(255, 229, 128, 0.28);
+}
 .markdown-prose :deep(img) { max-width: 100%; height: auto; display: block; margin: 12px auto; border-radius: 6px; }
 .markdown-prose :deep(a) { color: var(--reading-annotate); text-decoration: underline; }
 .markdown-prose :deep(blockquote) {

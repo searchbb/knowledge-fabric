@@ -6,8 +6,11 @@ from flask import Flask
 import pytest
 
 from app.api import registry_bp, concept_bp
+from app.api.routes.kfc_material_graphs import kfc_assets_bp
 from app.models.project import ProjectManager, ProjectStatus
+from app.services.kfc_material_graph_store import KfcMaterialGraphStore
 from app.services.registry import global_concept_registry as registry_mod
+from app.services.registry import source_evidence_resolver as evidence_resolver
 from app.services.workspace import concept_view_service as concept_view_module
 
 
@@ -18,6 +21,11 @@ def registry_client(tmp_path, monkeypatch):
     monkeypatch.setattr(ProjectManager, "PROJECTS_DIR", str(projects_dir))
     # Point registry storage to the same tmp dir
     monkeypatch.setattr(registry_mod, "_registry_path", lambda: str(projects_dir / "concept_registry.json"))
+    monkeypatch.setattr(KfcMaterialGraphStore, "CONCEPT_REGISTRY_PATH", projects_dir / "concept_registry.json")
+    monkeypatch.setattr(KfcMaterialGraphStore, "MATERIAL_GRAPH_DIR", tmp_path / "kfc_material_graphs")
+    monkeypatch.setattr(KfcMaterialGraphStore, "GRAPHIFICATION_REQUEST_DIR", tmp_path / "kfc_graphification_requests")
+    monkeypatch.setattr(KfcMaterialGraphStore, "MATERIAL_SLICE_DIR", tmp_path / "material_slices")
+    monkeypatch.setattr(KfcMaterialGraphStore, "KFC_RELATION_DIR", tmp_path / "kfc_asset_relations")
 
     # Stub graph loader for project concept tests
     monkeypatch.setattr(
@@ -40,6 +48,7 @@ def registry_client(tmp_path, monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(registry_bp, url_prefix="/api/registry")
     app.register_blueprint(concept_bp, url_prefix="/api/concept")
+    app.register_blueprint(kfc_assets_bp)
     return app.test_client()
 
 
@@ -60,6 +69,86 @@ def _create_project_with_concepts(accepted_keys: dict[str, str] | None = None) -
         project.concept_decisions = {"version": 1, "items": items}
     ProjectManager.save_project(project)
     return project.project_id
+
+
+def _seed_materialized_kfc_concept() -> str:
+    """Seed a registry entry plus material slice and KFC relations."""
+    concept_id = "canon_agent_runtime"
+    registry_mod._save_registry(
+        {
+            "version": 1,
+            "entries": {
+                concept_id: {
+                    "entry_id": concept_id,
+                    "concept_id": concept_id,
+                    "canonical_name": "Agent Runtime",
+                    "label": "Agent Runtime",
+                    "concept_type": "Concept",
+                    "asset_type": "concept",
+                    "aliases": [],
+                    "description": "Mavis article source text",
+                    "definition": "Mavis article source text",
+                    "source_links": [],
+                    "source_article_id": "src_mavis",
+                    "source_article_title": "Agent会协作还会决策？我对Mavis的技术实现很好奇",
+                    "source_markdown_path": "/tmp/mavis.md",
+                    "source_quote": "Mavis uses an Agent Runtime.",
+                    "source_context": "Agent Runtime coordinates Leader, Worker, and Verifier.",
+                    "source_material_slice_id": "ms_mavis",
+                    "source_lead_id": "lp_mavis",
+                    "linked_topic_cluster_ids": ["tc_agent_harness"],
+                    "linked_research_project_ids": ["rp_strategy"],
+                    "related_existing_concepts": [{"concept_id": "canon_agent", "label": "Agent", "score": 0.74}],
+                    "created_at": "2026-05-18T12:03:04",
+                    "updated_at": "2026-05-18T12:03:04",
+                },
+                "canon_agent": {
+                    "entry_id": "canon_agent",
+                    "canonical_name": "Agent",
+                    "concept_type": "Concept",
+                    "aliases": [],
+                    "description": "",
+                    "source_links": [],
+                    "created_at": "2026-05-01T00:00:00",
+                    "updated_at": "2026-05-01T00:00:00",
+                },
+            },
+        }
+    )
+    KfcMaterialGraphStore.MATERIAL_SLICE_DIR.mkdir(parents=True, exist_ok=True)
+    (KfcMaterialGraphStore.MATERIAL_SLICE_DIR / "ms_mavis.json").write_text(
+        """
+{
+  "slice_id": "ms_mavis",
+  "title": "Agent Runtime",
+  "display_title": "Agent Runtime",
+  "source_article_id": "src_mavis",
+  "source_title": "Agent会协作还会决策？我对Mavis的技术实现很好奇",
+  "source_markdown_path": "/tmp/mavis.md",
+  "source_quote": "Mavis uses an Agent Runtime.",
+  "source_context": "Agent Runtime coordinates Leader, Worker, and Verifier."
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    KfcMaterialGraphStore.KFC_RELATION_DIR.mkdir(parents=True, exist_ok=True)
+    (KfcMaterialGraphStore.KFC_RELATION_DIR / "rel_mavis_agent.json").write_text(
+        """
+{
+  "relation_id": "rel_mavis_agent",
+  "source_type": "concept_registry_entry",
+  "source_id": "canon_agent_runtime",
+  "target_type": "concept_registry_entry",
+  "target_id": "canon_agent",
+  "relation_type": "related_to",
+  "source_article_id": "src_mavis",
+  "cluster_id": "tc_agent_harness",
+  "project_id": "rp_strategy"
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    return concept_id
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +187,58 @@ class TestRegistryCRUD:
         resp = registry_client.get(f"/api/registry/concepts/{entry_id}")
         assert resp.status_code == 200
         assert resp.get_json()["data"]["canonical_name"] == "Kubernetes"
+
+    def test_get_single_enriches_source_evidence_refs_from_project_graph(self, registry_client, monkeypatch):
+        project = ProjectManager.create_project(name="FDE source article")
+        project.status = ProjectStatus.GRAPH_COMPLETED
+        project.graph_id = "graph_fde"
+        ProjectManager.save_project(project)
+        ProjectManager.save_extracted_text(
+            project.project_id,
+            "\n".join(
+                [
+                    "OpenAI 和 Anthropic 都在重估企业服务。",
+                    "两家方向不同，但支撑它们的核心组织形式，都是 Palantir 推广的 FDE 模式。",
+                    "FDE 直接驻场，理解客户的数据、流程、痛点，然后把通用模型打磨成能跑业务的具体方案。",
+                ]
+            ),
+        )
+        monkeypatch.setattr(
+            evidence_resolver,
+            "load_graph_data",
+            lambda graph_id: {
+                "graph_id": graph_id,
+                "nodes": [
+                    {
+                        "uuid": "node_fde",
+                        "name": "FDE 模式",
+                        "labels": ["Method"],
+                        "summary": "由前沿部署工程师驻场填补产品与需求差距的组织方法论。",
+                    }
+                ],
+                "edges": [],
+            },
+        )
+
+        resp = registry_client.post("/api/registry/concepts", json={"canonical_name": "FDE 模式", "concept_type": "Method"})
+        entry_id = resp.get_json()["data"]["entry_id"]
+        registry_client.post(
+            f"/api/registry/concepts/{entry_id}/links",
+            json={
+                "project_id": project.project_id,
+                "project_name": project.name,
+                "concept_key": "Method:fde 模式",
+            },
+        )
+
+        resp = registry_client.get(f"/api/registry/concepts/{entry_id}")
+        assert resp.status_code == 200
+        data = resp.get_json()["data"]
+        assert data["source_quote"].startswith("两家方向不同")
+        assert "FDE 直接驻场" in data["source_context"]
+        assert data["source_material_slice_id"] == "node_fde"
+        assert data["source_evidence_refs"][0]["source_node_uuid"] == "node_fde"
+        assert data["source_evidence_refs"][0]["source_text"].startswith("由前沿部署工程师")
 
     def test_get_not_found(self, registry_client):
         resp = registry_client.get("/api/registry/concepts/nonexistent")
@@ -249,6 +390,72 @@ class TestRegistrySearch:
     def test_search_empty_query(self, registry_client):
         resp = registry_client.get("/api/registry/concepts/search?q=")
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# KFC material graph snapshots
+# ---------------------------------------------------------------------------
+
+
+class TestKfcMaterialGraph:
+    def test_snapshot_api_creates_deterministic_material_graph_without_project(self, registry_client):
+        concept_id = _seed_materialized_kfc_concept()
+
+        resp = registry_client.post(f"/api/registry/concepts/{concept_id}/graph/snapshot", json={"actor": "test"})
+        assert resp.status_code == 200
+        data = resp.get_json()["data"]
+        assert data["created"] is True
+        assert data["graph_status"] == "snapshot_available"
+        assert data["node_count"] >= 5
+        assert data["edge_count"] >= 5
+        assert data["cross_article_link_count"] >= 1
+        graph = data["graph"]
+        assert graph["provenance"]["no_model_execution"] is True
+        assert graph["provenance"]["creation_mode"] == "deterministic"
+        node_types = {node["node_type"] for node in graph["nodes"]}
+        assert {"concept_registry_entry", "material_slice", "source_article", "topic_cluster", "research_project"}.issubset(node_types)
+        edge_types = {edge["edge_type"] for edge in graph["edges"]}
+        assert {"derived_from", "sliced_from", "belongs_to", "supports", "related_to"}.issubset(edge_types)
+        assert not list((KfcMaterialGraphStore.CONCEPT_REGISTRY_PATH.parent).glob("proj_*.json"))
+
+        concept = registry_client.get(f"/api/registry/concepts/{concept_id}").get_json()["data"]
+        assert concept["graph_status"] == "snapshot_available"
+        assert concept["material_graph_id"] == data["material_graph_id"]
+        assert concept["source_links"] == []
+
+    def test_snapshot_api_is_idempotent_and_material_graph_list_filters(self, registry_client):
+        concept_id = _seed_materialized_kfc_concept()
+
+        first = registry_client.post(f"/api/registry/concepts/{concept_id}/graph/snapshot").get_json()["data"]
+        second = registry_client.post(f"/api/registry/concepts/{concept_id}/graph/snapshot").get_json()["data"]
+        assert first["material_graph_id"] == second["material_graph_id"]
+        assert second["created"] is False
+        assert len(list(KfcMaterialGraphStore.MATERIAL_GRAPH_DIR.glob("kmg_*.json"))) == 1
+
+        resp = registry_client.get(f"/api/kfc/material-graphs?concept_id={concept_id}")
+        assert resp.status_code == 200
+        payload = resp.get_json()["data"]
+        assert payload["total"] == 1
+        assert payload["items"][0]["source_concept_id"] == concept_id
+
+    def test_graphification_request_writes_request_only(self, registry_client):
+        concept_id = _seed_materialized_kfc_concept()
+
+        resp = registry_client.post(
+            f"/api/registry/concepts/{concept_id}/graphification-requests",
+            json={"actor": "human", "reason": "Need external relation proposals."},
+        )
+        assert resp.status_code == 201
+        request_data = resp.get_json()["data"]
+        assert request_data["status"] == "requested"
+        assert request_data["rules"]["proposal_only"] is True
+        assert request_data["rules"]["do_not_auto_apply"] is True
+        assert request_data["rules"]["no_kfc_runtime_execution"] is True
+        assert len(list(KfcMaterialGraphStore.GRAPHIFICATION_REQUEST_DIR.glob("kgreq_*.json"))) == 1
+        assert not list((KfcMaterialGraphStore.CONCEPT_REGISTRY_PATH.parent).glob("proj_*.json"))
+
+        concept = registry_client.get(f"/api/registry/concepts/{concept_id}").get_json()["data"]
+        assert concept["graphification_request_id"] == request_data["request_id"]
 
 
 # ---------------------------------------------------------------------------
