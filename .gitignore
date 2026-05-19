@@ -82,3 +82,6 @@ frontend/src/archive/
 backend/scripts/test_graphiti_*.py
 # Local git worktrees — each subdir is a full checkout.
 .worktrees/
+
+# Local Syncthing folder metadata.
+.stfolder/
